@@ -1,6 +1,6 @@
 {
   "name": "@super-store/react",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "React hooks for @super-store/store — useStore and useStoreSelector, tear-free over useSyncExternalStore.",
   "keywords": [
     "crdt",
