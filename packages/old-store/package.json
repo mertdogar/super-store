@@ -1,0 +1,27 @@
+{
+  "name": "@super-store/old-store",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noCheck",
+    "build:watch": "tsc -p tsconfig.json --noCheck --watch",
+    "prepare": "tsc -p tsconfig.json --noCheck",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@vitest/ui": "^4.1.4",
+    "typescript": "~5.8.3",
+    "vitest": "^4.1.2"
+  }
+}
