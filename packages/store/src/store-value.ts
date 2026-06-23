@@ -1,5 +1,14 @@
 import * as Y from "yjs";
-import { decodeLeaf, deepEqual, encodeLeaf, hashKey, isYType } from "./codec";
+import {
+  compileOpaque,
+  decodeLeaf,
+  deepEqual,
+  encodeLeaf,
+  hashKey,
+  isYType,
+  materializeDeep,
+  patchDeep,
+} from "./codec";
 
 /** Origin tag for every write this library makes, so observers (and, later,
  * UndoManager) can distinguish local store writes from remote merges. */
@@ -10,7 +19,12 @@ export const STORE_ORIGIN = Symbol.for("@super-store/store");
  * write tagged STORE_ORIGIN, or an undo/redo tagged by the UndoManager) is
  * `local`, and only applied remote merges are not — which is exactly what a
  * sync layer needs to break echoes without ever seeing a Yjs origin. */
-const APPLY_ORIGIN = Symbol.for("@super-store/store/applied");
+export const APPLY_ORIGIN = Symbol.for("@super-store/store/applied");
+
+/** The two backing modes, used as a type parameter so `update()` can select the
+ * right argument type at compile time (shallow → `StoreUpdate`, document →
+ * `DeepPartial`). */
+export type StoreMode = "shallow" | "document";
 
 /**
  * The resolved snapshot view of `T`: every nested `StoreValue<V>` field is
@@ -18,16 +32,36 @@ const APPLY_ORIGIN = Symbol.for("@super-store/store/applied");
  * React's `useSyncExternalStore` consumes.
  */
 export type InferStoreValueSnapshot<T> = {
-  [K in keyof T]: T[K] extends StoreValue<infer V> ? V : T[K];
+  [K in keyof T]: T[K] extends StoreValue<infer V, StoreMode> ? V : T[K];
 };
 
 /**
- * The shape `update()` accepts: every top-level key is optional, and any
- * nested `StoreValue<V>` value is itself recursively partial-through-stores.
+ * The shape shallow-mode `update()` accepts: every top-level key is optional,
+ * and any nested `StoreValue<V>` value is itself recursively partial-through-
+ * stores. Nested *plain* objects are replaced wholesale (shallow semantics).
  */
 export type StoreUpdate<T> = {
-  [K in keyof T]?: T[K] extends StoreValue<infer V> ? StoreUpdate<V> : T[K];
+  [K in keyof T]?: T[K] extends StoreValue<infer V, StoreMode> ? StoreUpdate<V> : T[K];
 };
+
+/**
+ * The shape document-mode `update()` accepts: partial recursively through plain
+ * nested objects (each field merges), matching document mode's field-level
+ * merge. Arrays / `Map` / `Set` are leaves — replaced wholesale (§1a: arrays are
+ * element-opaque), so they are not made partial.
+ */
+export type DeepPartial<T> = T extends ReadonlyArray<unknown>
+  ? T
+  : T extends Map<unknown, unknown> | Set<unknown>
+    ? T
+    : T extends object
+      ? { [K in keyof T]?: DeepPartial<T[K]> }
+      : T;
+
+/** The argument type of `update()`, selected by the store's mode. */
+export type UpdateArg<T, M extends StoreMode> = M extends "document"
+  ? DeepPartial<T>
+  : StoreUpdate<T>;
 
 const specialTypes = ["Set", "Map", "Array", "StoreValue"] as const;
 
@@ -100,7 +134,7 @@ export type Shape<K> = {
   readonly storeValueKeys: ReadonlyArray<K>;
 };
 
-export interface StoreValueOptions<T> {
+export interface StoreValueOptions<T, M extends StoreMode = "shallow"> {
   isEqual?: (a: T, b: T) => boolean;
   name?: string;
   debug?: boolean;
@@ -112,6 +146,17 @@ export interface StoreValueOptions<T> {
    * Yjs UndoManager scoped to this root, tracking only this store's own writes.
    * Off by default — UndoManager pins deleted content and disables GC. */
   undo?: boolean | { captureTimeout?: number };
+  /** `"document"` makes this a recursive CRDT document: plain nested objects map
+   * to nested `Y.Map`, plain nested arrays to `Y.Array` (element-opaque), so
+   * concurrent edits to different fields of the same nested object merge instead
+   * of clobbering. Reads stay plain JSON. Default `"shallow"` — top-level keys
+   * only, nested values opaque. */
+  mode?: M;
+  /** Document-mode only. Path globs whose subtrees stay atomic single cells
+   * (whole-value LWW), e.g. `["elements.*.value", "state"]`. `*` matches one
+   * segment. Required for discriminated-union subtrees, where field-merge
+   * corrupts. Must be identical across all peers (see DESIGN §4). */
+  opaque?: string[];
 }
 
 /**
@@ -130,7 +175,7 @@ export interface StoreValueOptions<T> {
  * when their parent binds (their value is copied into a nested Y type and their
  * handle repointed — instance identity is preserved).
  */
-export class StoreValue<T> {
+export class StoreValue<T, M extends StoreMode = "shallow"> {
   protected _value: T;
   protected listeners: Set<() => void> = new Set();
   protected isEqual: (a: T, b: T) => boolean;
@@ -160,13 +205,20 @@ export class StoreValue<T> {
   private _disposed = false;
   private _activated = false;
   private _undoManager: Y.UndoManager | null = null;
+  /** Document mode: recurse plain nested objects/arrays into nested Y types
+   * instead of storing them as opaque leaves. */
+  private _documentMode: boolean;
+  /** Predicate over a node's path: true keeps that subtree an atomic leaf. */
+  private _isOpaque: (path: string[]) => boolean;
 
-  constructor(value: T, options?: StoreValueOptions<T>) {
+  constructor(value: T, options?: StoreValueOptions<T, M>) {
     this._value = value;
     this._initialTypeName = getTypeName(value);
     this._name = options?.name ?? `${this._initialTypeName} StoreValue`;
     this._rootKey = options?.name ?? "root";
     this._debug = options?.debug ?? false;
+    this._documentMode = options?.mode === "document";
+    this._isOpaque = compileOpaque(options?.opaque ?? []);
     this.isEqual = options?.isEqual ?? ((a, b) => a === b);
     this._partialUpdateSupported = this._initialTypeName === "Object";
     this._yKind = yKindOf(this._initialTypeName);
@@ -281,27 +333,38 @@ export class StoreValue<T> {
    * propagate without losing child identity. In bound mode the whole update is
    * one transaction (one emit per affected handle).
    */
-  update(value: StoreUpdate<T>): boolean {
+  update(value: UpdateArg<T, M>): boolean {
     if (this._disposed) throw new Error("StoreValue has been disposed");
     if (!this._partialUpdateSupported) {
       throw new Error(
         `Partial updates are not supported for this value type ${typeof this._value}`,
       );
     }
-    if (this._bound) return this._updateBound(value);
+    const update = value as StoreUpdate<T>;
+    if (this._bound) return this._updateBound(update);
 
-    const storeValueUpdates = pick(value, this._shape.storeValueKeys);
+    const storeValueUpdates = pick(update, this._shape.storeValueKeys);
     for (const [key, updateValue] of Object.entries(storeValueUpdates)) {
       const storeValue = this._value[key as keyof T] as StoreValue<unknown>;
       storeValue.update(updateValue as never);
     }
-    const nonStoreValueUpdates = pick(value, this._shape.nonStoreValueKeys);
+    const nonStoreValueUpdates = pick(update, this._shape.nonStoreValueKeys);
     const newValue = { ...this._value, ...nonStoreValueUpdates };
     return this.set(newValue as T);
   }
 
   private _updateBound(value: StoreUpdate<T>): boolean {
     this._dirty = false;
+    if (this._documentMode) {
+      this._doc!.transact(() => {
+        // isPartial: merge keys, never delete — field-merge semantics, so a
+        // partial update of one nested field keeps its siblings.
+        if (patchDeep(this._ytype as Y.Map<unknown>, value, this._isOpaque, [], true)) {
+          this._dirty = true;
+        }
+      }, STORE_ORIGIN);
+      return this._dirty;
+    }
     let childChanged = false;
     this._doc!.transact(() => {
       const plain: Record<string, unknown> = {};
@@ -494,12 +557,20 @@ export class StoreValue<T> {
         (ytype as Y.Map<unknown>).set("v", encodeLeaf(v));
         break;
       case "object":
+        if (this._documentMode) {
+          patchDeep(ytype as Y.Map<unknown>, v, this._isOpaque);
+          break;
+        }
         for (const [k, val] of Object.entries(v as object)) {
           if (val instanceof StoreValue) this._attachChild(k, val);
           else (ytype as Y.Map<unknown>).set(k, encodeLeaf(val));
         }
         break;
       case "array":
+        if (this._documentMode) {
+          patchDeep(ytype as Y.Array<unknown>, v, this._isOpaque);
+          break;
+        }
         (ytype as Y.Array<unknown>).insert(0, (v as unknown[]).map(encodeLeaf));
         break;
       case "set":
@@ -519,15 +590,19 @@ export class StoreValue<T> {
    * Must run AFTER the populate transaction has committed. */
   private _activateTree(): void {
     if (this._activated) return;
-    // Adopt any nested Y types that are not yet tracked as child handles
-    // (the hydrate path: a populated doc whose children we did not create).
-    this._reconcileChildren();
+    // Document mode has no per-node child handles — the whole subtree is bare
+    // nested Y types, materialised plain. Skip reconciliation entirely.
+    if (!this._documentMode) {
+      // Adopt any nested Y types that are not yet tracked as child handles
+      // (the hydrate path: a populated doc whose children we did not create).
+      this._reconcileChildren();
+    }
     this._value = this._materialize();
     this._shape = this._buildShape();
     // Activate children first so their `_value` is materialised before this
     // node snapshots them — otherwise the snapshot captures the children's
     // stale input instances and the first change swaps the references.
-    for (const child of this._children.values()) child._activateTree();
+    if (!this._documentMode) for (const child of this._children.values()) child._activateTree();
     this._snapshot = this._buildSnapshot();
     this._yobserver = () => this._onYChange();
     this._ytype!.observeDeep(this._yobserver);
@@ -603,6 +678,7 @@ export class StoreValue<T> {
       case "scalar":
         return decodeLeaf((ytype as Y.Map<unknown>).get("v")) as T;
       case "object": {
+        if (this._documentMode) return materializeDeep(ytype) as T;
         const out: Record<string, unknown> = {};
         for (const k of (ytype as Y.Map<unknown>).keys()) {
           const v = (ytype as Y.Map<unknown>).get(k);
@@ -620,6 +696,7 @@ export class StoreValue<T> {
         return out as T;
       }
       case "array":
+        if (this._documentMode) return materializeDeep(ytype) as T;
         return (ytype as Y.Array<unknown>).toArray().map(decodeLeaf) as T;
       case "set":
         return new Set([...(ytype as Y.Map<unknown>).values()].map(decodeLeaf)) as T;
@@ -644,7 +721,7 @@ export class StoreValue<T> {
     //
     // A remote merge may add/remove nested child subtrees — reconcile handles,
     // then activate any newly-adopted ones (idempotent for existing children).
-    if (this._reconcileChildren()) {
+    if (!this._documentMode && this._reconcileChildren()) {
       for (const child of this._children.values()) child._activateTree();
     }
     this._value = this._materialize();
@@ -666,6 +743,10 @@ export class StoreValue<T> {
         break;
       }
       case "object": {
+        if (this._documentMode) {
+          if (patchDeep(ytype as Y.Map<unknown>, value, this._isOpaque)) this._dirty = true;
+          break;
+        }
         const keys = new Set(Object.keys(value as object));
         for (const k of Array.from((ytype as Y.Map<unknown>).keys())) {
           if (!keys.has(k)) this._deleteKey(k);
@@ -674,6 +755,10 @@ export class StoreValue<T> {
         break;
       }
       case "array":
+        if (this._documentMode) {
+          if (patchDeep(ytype as Y.Array<unknown>, value, this._isOpaque)) this._dirty = true;
+          break;
+        }
         this._patchArray(value as unknown[]);
         break;
       case "set": {

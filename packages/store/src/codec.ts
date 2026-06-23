@@ -88,6 +88,146 @@ export function decodeLeaf(v: unknown): unknown {
   return v;
 }
 
+/** A plain object/array is one document mode decomposes into a nested Y type.
+ * Everything else (scalars, Map, Set, class instances, Y types) stays an opaque
+ * leaf via the codec. */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  if (v === null || typeof v !== "object") return false;
+  if (Array.isArray(v) || v instanceof Map || v instanceof Set || isYType(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+
+/** Compile `opaque` path globs into a predicate over a node's path (relative to
+ * the store root). `*` matches exactly one segment (a record key / array index),
+ * so `elements.*.value` marks every element's `value` subtree atomic. A matched
+ * node — and everything under it — is stored as a single opaque leaf. */
+export function compileOpaque(patterns: string[]): (path: string[]) => boolean {
+  if (patterns.length === 0) return () => false;
+  const compiled = patterns.map((p) => p.split("."));
+  return (path) =>
+    compiled.some(
+      (pat) => pat.length === path.length && pat.every((seg, i) => seg === "*" || seg === path[i]),
+    );
+}
+
+const DEEP_NOTHING = Symbol("deep-nothing");
+
+/** Document-mode read: a nested Y type -> plain JSON, recursively; a leaf ->
+ * decoded value. No `Y.*` and no handle ever leaks. */
+export function materializeDeep(yval: unknown): unknown {
+  if (yval instanceof Y.Map) {
+    const out: Record<string, unknown> = {};
+    for (const k of yval.keys()) out[k] = materializeDeep(yval.get(k));
+    return out;
+  }
+  if (yval instanceof Y.Array) return yval.toArray().map(materializeDeep);
+  return decodeLeaf(yval);
+}
+
+/** Prefix/suffix diff for a Y.Array of opaque leaf elements (§1a — arrays are
+ * element-opaque in document mode: positional insert/delete merges, whole-
+ * element replace is LWW). Returns whether the array was mutated. */
+export function patchArrayLeaf(ya: Y.Array<unknown>, next: unknown[]): boolean {
+  const old = ya.toArray().map(decodeLeaf);
+  let changed = false;
+  let p = 0;
+  while (p < old.length && p < next.length && deepEqual(old[p], next[p])) p++;
+  let s = 0;
+  while (
+    s < old.length - p &&
+    s < next.length - p &&
+    deepEqual(old[old.length - 1 - s], next[next.length - 1 - s])
+  ) {
+    s++;
+  }
+  const delCount = old.length - p - s;
+  const insItems = next.slice(p, next.length - s).map(encodeLeaf);
+  if (delCount > 0) {
+    ya.delete(p, delCount);
+    changed = true;
+  }
+  if (insItems.length > 0) {
+    ya.insert(p, insItems);
+    changed = true;
+  }
+  return changed;
+}
+
+/** Recurse-diff a single key of a Y.Map (§1d — diff into an existing subtree,
+ * never detach-and-replace, so a concurrent edit on a sibling survives a whole-
+ * tree write). Returns whether anything changed. */
+export function setDeepKey(
+  target: Y.Map<unknown>,
+  key: string,
+  v: unknown,
+  isOpaque: (path: string[]) => boolean,
+  path: string[],
+  isPartial: boolean,
+): boolean {
+  const childPath = [...path, key];
+  const cur = target.get(key);
+  if (isPlainObject(v) && !isOpaque(childPath)) {
+    let changed = false;
+    let m = cur instanceof Y.Map ? cur : null;
+    if (!m) {
+      m = new Y.Map();
+      target.set(key, m);
+      changed = true;
+    }
+    return patchDeep(m, v, isOpaque, childPath, isPartial) || changed;
+  }
+  if (Array.isArray(v) && !isOpaque(childPath)) {
+    let changed = false;
+    let a = cur instanceof Y.Array ? cur : null;
+    if (!a) {
+      a = new Y.Array();
+      target.set(key, a);
+      changed = true;
+    }
+    return patchArrayLeaf(a, v) || changed;
+  }
+  const curLeaf = isYType(cur) ? DEEP_NOTHING : decodeLeaf(cur);
+  if (curLeaf === DEEP_NOTHING || !deepEqual(curLeaf, v)) {
+    target.set(key, encodeLeaf(v));
+    return true;
+  }
+  return false;
+}
+
+/** Document-mode write: recurse `source` (plain JSON) into `target` (a nested Y
+ * type), diffing so unchanged data is never rewritten. `isPartial` (update path)
+ * merges keys and never deletes; full (set path) deletes keys absent from
+ * `source`. Returns whether anything changed — callers bubble this into `_dirty`
+ * so `set()`/`update()` report (and emit on) real change only. */
+export function patchDeep(
+  target: Y.Map<unknown> | Y.Array<unknown>,
+  source: unknown,
+  isOpaque: (path: string[]) => boolean,
+  path: string[] = [],
+  isPartial = false,
+): boolean {
+  if (target instanceof Y.Array) {
+    return Array.isArray(source) ? patchArrayLeaf(target, source) : false;
+  }
+  if (!isPlainObject(source)) return false;
+  const keys = Object.keys(source);
+  let changed = false;
+  if (!isPartial) {
+    const want = new Set(keys);
+    for (const k of Array.from(target.keys())) {
+      if (!want.has(k)) {
+        target.delete(k);
+        changed = true;
+      }
+    }
+  }
+  for (const k of keys) {
+    if (setDeepKey(target, k, source[k], isOpaque, path, isPartial)) changed = true;
+  }
+  return changed;
+}
+
 /** Deep structural equality used by the diff-and-patch to decide whether a
  * key/element actually changed, so unchanged data is never rewritten (which
  * would tombstone it and bloat the doc). Independent of the user's `isEqual`,
