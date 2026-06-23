@@ -1,4 +1,9 @@
-const __DEBUG__ = false;
+import * as Y from "yjs";
+import { decodeLeaf, deepEqual, encodeLeaf, hashKey, isYType } from "./codec";
+
+/** Origin tag for every write this library makes, so observers (and, later,
+ * UndoManager) can distinguish local store writes from remote merges. */
+export const STORE_ORIGIN = Symbol.for("@super-store/store");
 
 /**
  * The resolved snapshot view of `T`: every nested `StoreValue<V>` field is
@@ -11,13 +16,7 @@ export type InferStoreValueSnapshot<T> = {
 
 /**
  * The shape `update()` accepts: every top-level key is optional, and any
- * nested `StoreValue<V>` value is itself recursively partial-through-stores
- * — matching the runtime's recursive dispatch into nested children.
- *
- * Plain-object leaves are *not* recursively partial. At the leaf the merge
- * is shallow (`{...this._value, ...partial}`), so passing
- * `{ nested: { foo: 1 } }` to an update of a plain-object leaf would
- * overwrite the entire `nested` object — same as `Partial<T>`.
+ * nested `StoreValue<V>` value is itself recursively partial-through-stores.
  */
 export type StoreUpdate<T> = {
   [K in keyof T]?: T[K] extends StoreValue<infer V> ? StoreUpdate<V> : T[K];
@@ -35,13 +34,15 @@ const supportedTypes = [
   ...specialTypes,
 ] as const;
 
-function getTypeName<T>(value: T): (typeof supportedTypes)[number] {
+type TypeName = (typeof supportedTypes)[number];
+type YKind = "scalar" | "object" | "array" | "set" | "map";
+
+function getTypeName<T>(value: T): TypeName {
   if (value === null) return "null";
   if (value === undefined) return "undefined";
   if (typeof value === "object") {
     const name = (value as object).constructor.name;
-    if (specialTypes.includes(name as never)) return name as (typeof specialTypes)[number];
-
+    if (specialTypes.includes(name as never)) return name as TypeName;
     if (name === "Object") return "Object";
     throw new Error(`Unsupported type: ${name}`);
   }
@@ -51,24 +52,35 @@ function getTypeName<T>(value: T): (typeof supportedTypes)[number] {
   throw new Error(`Unsupported type: ${typeof value}`);
 }
 
+function yKindOf(typeName: TypeName): YKind {
+  switch (typeName) {
+    case "Object":
+      return "object";
+    case "Array":
+      return "array";
+    case "Set":
+      return "set";
+    case "Map":
+      return "map";
+    default:
+      return "scalar";
+  }
+}
+
 function isOneOfSpecialTypes(value: unknown) {
-  const type = getTypeName(value);
-  return specialTypes.includes(type as never);
+  return specialTypes.includes(getTypeName(value) as never);
 }
 
 function pick<T extends object, K extends keyof T>(obj: T, keys: readonly K[]): Pick<T, K> {
   const result = {} as Pick<T, K>;
   for (const key of keys) {
-    if (key in obj) {
-      result[key] = obj[key];
-    }
+    if (key in obj) result[key] = obj[key];
   }
   return result;
 }
 
 function cloneSkippingStoreValues<T>(value: T): T {
   if (typeof value !== "object" || value === null) return value;
-
   const result: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as object)) {
     result[k] = isOneOfSpecialTypes(v) ? v : structuredClone(v);
@@ -81,6 +93,32 @@ export type Shape<K> = {
   readonly storeValueKeys: ReadonlyArray<K>;
 };
 
+export interface StoreValueOptions<T> {
+  isEqual?: (a: T, b: T) => boolean;
+  name?: string;
+  debug?: boolean;
+  /** Inject a Yjs document to persist/sync this store. Attach providers
+   * (y-indexeddb, y-websocket, …) to this doc yourself. Omit for a private
+   * in-memory doc that is created lazily on first Yjs access. */
+  doc?: Y.Doc;
+}
+
+/**
+ * Reactive primitive backed by Yjs. A `StoreValue` is a typed *handle* over a
+ * Yjs shared type. It has two backing modes:
+ *
+ * - **unbound** — a plain in-memory value (identical semantics to the original
+ *   in-memory store). This is the state for local-only stores and for children
+ *   that have not yet been adopted by a bound parent.
+ * - **bound** — backed by a Yjs type inside a `Y.Doc`. Reads materialise from
+ *   the doc; writes go through `doc.transact` as a diff-and-patch; reactivity
+ *   is driven by `observeDeep`.
+ *
+ * Binding is lazy and cascades from the root: a root binds when a `doc` is
+ * injected or on first access to `.doc` / `.getYType()`; nested children bind
+ * when their parent binds (their value is copied into a nested Y type and their
+ * handle repointed — instance identity is preserved).
+ */
 export class StoreValue<T> {
   protected _value: T;
   protected listeners: Set<() => void> = new Set();
@@ -88,63 +126,81 @@ export class StoreValue<T> {
   protected _partialUpdateSupported: boolean;
   protected _name: string;
   protected _debug: boolean;
-  protected _shape: Shape<keyof T>;
+  protected _shape!: Shape<keyof T>;
   private _childUnsubs: Array<() => void> = [];
-  private _initialTypeName: string;
-  // Cached snapshot — rebuilt in emitChange() so getSnapshot() always returns
-  // a stable reference between renders, satisfying useSyncExternalStore.
+  private _initialTypeName: TypeName;
   private _snapshot!: InferStoreValueSnapshot<T>;
   getSnapshot: () => InferStoreValueSnapshot<T>;
   subscribe: (listener: () => void) => () => void;
 
-  constructor(
-    value: T,
-    options?: {
-      isEqual?: (a: T, b: T) => boolean;
-      name?: string;
-      debug?: boolean;
-    },
-  ) {
-    this._value = value;
+  // ─── Yjs bound-mode state ──────────────────────────────────────────────
+  private _bound = false;
+  private _yKind: YKind;
+  private _rootKey: string;
+  private _doc: Y.Doc | null = null;
+  private _ownsDoc = false;
+  private _ytype: Y.AbstractType<any> | null = null;
+  /** key → child handle, for object stores. */
+  private _children: Map<string, StoreValue<unknown>> = new Map();
+  private _yobserver: (() => void) | null = null;
 
+  constructor(value: T, options?: StoreValueOptions<T>) {
+    this._value = value;
     this._initialTypeName = getTypeName(value);
     this._name = options?.name ?? `${this._initialTypeName} StoreValue`;
+    this._rootKey = options?.name ?? "root";
     this._debug = options?.debug ?? false;
     this.isEqual = options?.isEqual ?? ((a, b) => a === b);
     this._partialUpdateSupported = this._initialTypeName === "Object";
+    this._yKind = yKindOf(this._initialTypeName);
     this.getSnapshot = this._getSnapshot.bind(this);
     this.subscribe = this._subscribe.bind(this);
 
-    if (__DEBUG__ && this._debug) {
-      console.log(`[StoreValue]: ${this._name} created`, {
-        value,
-        initialTypeName: this._initialTypeName,
-        partialUpdateSupported: this._partialUpdateSupported,
-      });
+    if (options?.doc) {
+      this._bindRoot(options.doc, false);
+    } else {
+      this._watchChildren(value);
+      this._snapshot = this._buildSnapshot();
+      this._shape = this._buildShape();
     }
-
-    this._watchChildren(value);
-    this._snapshot = this._buildSnapshot();
-
-    this._shape = this._buildShape();
   }
 
   get value() {
     return this._value;
   }
 
+  /** The backing Yjs document. Accessing it lazily binds an unbound store to a
+   * private in-memory doc. Attach persistence/sync providers here. */
+  get doc(): Y.Doc {
+    if (!this._bound) this._bindRoot(new Y.Doc(), true);
+    return this._doc!;
+  }
+
+  /** The backing Yjs shared type. Lazily binds (private doc) if needed. */
+  getYType(): Y.AbstractType<unknown> {
+    if (!this._bound) this._bindRoot(new Y.Doc(), true);
+    return this._ytype!;
+  }
+
   /**
-   * Set the value.
-   * @param value - The new value
-   * @returns true if the value was changed, false otherwise
+   * Replace the value. In bound mode this is a recursive diff-and-patch inside
+   * a single transaction — unchanged data is never rewritten (so the doc does
+   * not bloat and concurrent edits merge). Returns `true` iff the value was
+   * considered changed under `isEqual`.
    */
   set(value: T): boolean {
     if (this.isEqual(this._value, value)) return false;
-    if (isOneOfSpecialTypes(value)) {
-      this._value = value;
-    } else {
-      this._value = cloneSkippingStoreValues(value);
+    if (this._bound) {
+      const kind = yKindOf(getTypeName(value));
+      if (kind !== this._yKind) {
+        throw new Error(
+          `Cannot change a bound StoreValue's root kind from ${this._yKind} to ${kind}`,
+        );
+      }
+      this._doc!.transact(() => this._patch(value), STORE_ORIGIN);
+      return true;
     }
+    this._value = isOneOfSpecialTypes(value) ? value : cloneSkippingStoreValues(value);
     this._watchChildren(this._value);
     this._shape = this._buildShape();
     this.emitChange();
@@ -152,15 +208,10 @@ export class StoreValue<T> {
   }
 
   /**
-   * Apply a partial update. Top-level keys are shallow-merged; nested
-   * `StoreValue` children receive a recursive `update()` call so partial
-   * updates propagate through the tree without losing child identity.
-   *
-   * Throws when the wrapped value is not a plain object — `set()` is the
-   * write path for scalars, Sets, Maps, and Arrays.
-   *
-   * @returns true if the resulting top-level value differed from the
-   * previous one under `isEqual` (default `===`).
+   * Apply a partial update. Object stores only. Plain keys are merged; nested
+   * `StoreValue` children receive a recursive `update()` so partial updates
+   * propagate without losing child identity. In bound mode the whole update is
+   * one transaction (one emit per affected handle).
    */
   update(value: StoreUpdate<T>): boolean {
     if (!this._partialUpdateSupported) {
@@ -168,16 +219,34 @@ export class StoreValue<T> {
         `Partial updates are not supported for this value type ${typeof this._value}`,
       );
     }
+    if (this._bound) return this._updateBound(value);
 
     const storeValueUpdates = pick(value, this._shape.storeValueKeys);
     for (const [key, updateValue] of Object.entries(storeValueUpdates)) {
       const storeValue = this._value[key as keyof T] as StoreValue<unknown>;
       storeValue.update(updateValue as never);
     }
-
     const nonStoreValueUpdates = pick(value, this._shape.nonStoreValueKeys);
     const newValue = { ...this._value, ...nonStoreValueUpdates };
     return this.set(newValue as T);
+  }
+
+  private _updateBound(value: StoreUpdate<T>): boolean {
+    let changed = false;
+    this._doc!.transact(() => {
+      const plain: Record<string, unknown> = {};
+      for (const [k, uv] of Object.entries(value)) {
+        const child = this._children.get(k);
+        if (child) child.update(uv as never);
+        else plain[k] = uv;
+      }
+      const merged = { ...(this._value as object), ...plain };
+      if (!this.isEqual(this._value, merged as T)) {
+        for (const [k, val] of Object.entries(plain)) this._setKey(k, val);
+        changed = true;
+      }
+    }, STORE_ORIGIN);
+    return changed;
   }
 
   _subscribe(listener: () => void) {
@@ -187,56 +256,22 @@ export class StoreValue<T> {
     };
   }
 
-  private _buildShape(): Shape<keyof T> {
-    const nonStoreValueKeys: (keyof T)[] = [];
-    const storeValueKeys: (keyof T)[] = [];
-    for (const [k, v] of Object.entries((this._value || {}) as object)) {
-      if (v instanceof StoreValue) {
-        storeValueKeys.push(k as keyof T);
-      } else {
-        nonStoreValueKeys.push(k as keyof T);
-      }
-    }
-    return { nonStoreValueKeys, storeValueKeys } as Shape<keyof T>;
-  }
-
-  private _buildSnapshot(): InferStoreValueSnapshot<T> {
-    if (this._childUnsubs.length === 0) return this._value as InferStoreValueSnapshot<T>;
-    const resolved: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(this._value as object)) {
-      resolved[k] = v instanceof StoreValue ? v.value : v;
-    }
-    return resolved as InferStoreValueSnapshot<T>;
-  }
-
-  _getSnapshot(): InferStoreValueSnapshot<T> {
-    if (__DEBUG__ && this._debug) {
-      console.log(`[StoreValue]: ${this._name} getting snapshot`, {
-        snapshot: this._snapshot,
-        childUnsubs: this._childUnsubs.length,
-      });
-    }
-    return this._snapshot;
-  }
-
   emitChange() {
     this._snapshot = this._buildSnapshot();
-    for (const listener of this.listeners) {
-      listener();
-    }
+    for (const listener of this.listeners) listener();
   }
 
-  /**
-   * Create a memoised projection of this store. Designed for
-   * `useSyncExternalStore` against composed stores: the parent re-emits on
-   * every child change, but `getSnapshot()` only returns a new reference
-   * when `selector(snapshot)` actually differs under `isEqual`
-   * (default: `Object.is`). React then bails out of the re-render.
-   *
-   * The returned `{ subscribe, getSnapshot }` is intended to be memoised
-   * by the consumer (e.g. behind `useMemo`) so React keeps a stable
-   * subscription across renders.
-   */
+  /** Tear down observers and, if this store created its own private doc,
+   * destroy it. */
+  dispose() {
+    if (this._yobserver && this._ytype) this._ytype.unobserveDeep(this._yobserver);
+    this._yobserver = null;
+    for (const child of this._children.values()) child.dispose();
+    this._childUnsubs.forEach((u) => u());
+    this._childUnsubs = [];
+    if (this._ownsDoc && this._doc) this._doc.destroy();
+  }
+
   select<R>(
     selector: (snapshot: InferStoreValueSnapshot<T>) => R,
     isEqual: (a: R, b: R) => boolean = Object.is,
@@ -256,24 +291,275 @@ export class StoreValue<T> {
     };
   }
 
+  // ─── Snapshot / shape (mode-agnostic; operate on `_value`) ──────────────
+
+  private _buildShape(): Shape<keyof T> {
+    const nonStoreValueKeys: (keyof T)[] = [];
+    const storeValueKeys: (keyof T)[] = [];
+    for (const [k, v] of Object.entries((this._value || {}) as object)) {
+      if (v instanceof StoreValue) storeValueKeys.push(k as keyof T);
+      else nonStoreValueKeys.push(k as keyof T);
+    }
+    return { nonStoreValueKeys, storeValueKeys } as Shape<keyof T>;
+  }
+
+  private _buildSnapshot(): InferStoreValueSnapshot<T> {
+    const v = this._value;
+    if (typeof v !== "object" || v === null) return v as InferStoreValueSnapshot<T>;
+    let hasChild = false;
+    for (const child of Object.values(v as object)) {
+      if (child instanceof StoreValue) {
+        hasChild = true;
+        break;
+      }
+    }
+    if (!hasChild) return v as InferStoreValueSnapshot<T>;
+    const resolved: Record<string, unknown> = {};
+    for (const [k, child] of Object.entries(v as object)) {
+      resolved[k] = child instanceof StoreValue ? child.value : child;
+    }
+    return resolved as InferStoreValueSnapshot<T>;
+  }
+
+  _getSnapshot(): InferStoreValueSnapshot<T> {
+    return this._snapshot;
+  }
+
   private _watchChildren(value: T): void {
     this._childUnsubs.forEach((u) => u());
     this._childUnsubs = [];
-    if (typeof value !== "object" || value === null) {
-      if (__DEBUG__ && this._debug) {
-        console.log(`[StoreValue]: ${this._name} has no children to watch`);
-      }
-      return;
-    }
+    if (typeof value !== "object" || value === null) return;
     for (const child of Object.values(value as object)) {
       if (child instanceof StoreValue) {
         this._childUnsubs.push(child._subscribe(() => this.emitChange()));
       }
     }
-    if (__DEBUG__ && this._debug) {
-      console.log(
-        `[StoreValue]: ${this._name} is now watching ${this._childUnsubs.length} children`,
-      );
+  }
+
+  // ─── Yjs binding ────────────────────────────────────────────────────────
+
+  private _bindRoot(doc: Y.Doc, ownsDoc: boolean) {
+    this._doc = doc;
+    this._ownsDoc = ownsDoc;
+    this._bound = true;
+    this._childUnsubs.forEach((u) => u());
+    this._childUnsubs = [];
+    this._ytype = this._yKind === "array" ? doc.getArray(this._rootKey) : doc.getMap(this._rootKey);
+    // M2 assumes a fresh doc. (Hydrating from an already-populated doc — the
+    // remote/persistence case — is handled in M3.)
+    doc.transact(() => this._populateTree(), STORE_ORIGIN);
+    this._activateTree();
+  }
+
+  /** Write `_value` into `_ytype`, recursing into and binding child handles.
+   * Must run inside a transaction; observers are NOT attached here. */
+  private _populateTree(): void {
+    const ytype = this._ytype!;
+    const v = this._value;
+    switch (this._yKind) {
+      case "scalar":
+        (ytype as Y.Map<unknown>).set("v", encodeLeaf(v));
+        break;
+      case "object":
+        for (const [k, val] of Object.entries(v as object)) {
+          if (val instanceof StoreValue) this._attachChild(k, val);
+          else (ytype as Y.Map<unknown>).set(k, encodeLeaf(val));
+        }
+        break;
+      case "array":
+        (ytype as Y.Array<unknown>).insert(0, (v as unknown[]).map(encodeLeaf));
+        break;
+      case "set":
+        for (const m of v as Set<unknown>) (ytype as Y.Map<unknown>).set(hashKey(m), encodeLeaf(m));
+        break;
+      case "map":
+        for (const [k, val] of v as Map<unknown, unknown>) {
+          (ytype as Y.Map<unknown>).set(hashKey(k), [encodeLeaf(k), encodeLeaf(val)]);
+        }
+        break;
     }
   }
+
+  /** Materialise `_value` from `_ytype`, attach the deep observer, recurse into
+   * children. Must run AFTER the populate transaction has committed. */
+  private _activateTree(): void {
+    this._value = this._materialize();
+    this._shape = this._buildShape();
+    // Activate children first so their `_value` is materialised before this
+    // node snapshots them — otherwise the snapshot captures the children's
+    // stale input instances and the first change swaps the references.
+    for (const child of this._children.values()) child._activateTree();
+    this._snapshot = this._buildSnapshot();
+    this._yobserver = () => this._onYChange();
+    this._ytype!.observeDeep(this._yobserver);
+  }
+
+  /** Create a nested Y type for a child, integrate it, populate it. Does not
+   * activate the child (caller decides when). */
+  private _attachChild(key: string, child: StoreValue<unknown>): void {
+    if (child._bound) {
+      throw new Error(
+        "Cannot nest a StoreValue that is already bound to a document. Build it inline or keep it unbound until adoption.",
+      );
+    }
+    const childY = child._yKind === "array" ? new Y.Array() : new Y.Map();
+    (this._ytype as Y.Map<unknown>).set(key, childY);
+    child._doc = this._doc;
+    child._ownsDoc = false;
+    child._bound = true;
+    child._ytype = childY;
+    child._childUnsubs.forEach((u) => u());
+    child._childUnsubs = [];
+    child._populateTree();
+    this._children.set(key, child);
+  }
+
+  private _materialize(): T {
+    const ytype = this._ytype!;
+    switch (this._yKind) {
+      case "scalar":
+        return decodeLeaf((ytype as Y.Map<unknown>).get("v")) as T;
+      case "object": {
+        const out: Record<string, unknown> = {};
+        for (const k of (ytype as Y.Map<unknown>).keys()) {
+          const v = (ytype as Y.Map<unknown>).get(k);
+          out[k] = isYType(v) ? this._children.get(k) : decodeLeaf(v);
+        }
+        return out as T;
+      }
+      case "array":
+        return (ytype as Y.Array<unknown>).toArray().map(decodeLeaf) as T;
+      case "set":
+        return new Set([...(ytype as Y.Map<unknown>).values()].map(decodeLeaf)) as T;
+      case "map":
+        return new Map(
+          [...(ytype as Y.Map<[unknown, unknown]>).values()].map(([k, v]) => [
+            decodeLeaf(k),
+            decodeLeaf(v),
+          ]),
+        ) as T;
+    }
+  }
+
+  private _onYChange(): void {
+    const prev = this._value;
+    this._value = this._materialize();
+    this._shape = this._buildShape();
+    if (this.isEqual(prev, this._value)) return;
+    this._snapshot = this._buildSnapshot();
+    for (const listener of this.listeners) listener();
+  }
+
+  // ─── Diff-and-patch writes (bound mode) ─────────────────────────────────
+
+  private _patch(value: T): void {
+    const ytype = this._ytype!;
+    switch (this._yKind) {
+      case "scalar": {
+        if (!deepEqual(decodeLeaf((ytype as Y.Map<unknown>).get("v")), value)) {
+          (ytype as Y.Map<unknown>).set("v", encodeLeaf(value));
+        }
+        break;
+      }
+      case "object": {
+        const keys = new Set(Object.keys(value as object));
+        for (const k of Array.from((ytype as Y.Map<unknown>).keys())) {
+          if (!keys.has(k)) this._deleteKey(k);
+        }
+        for (const [k, val] of Object.entries(value as object)) this._setKey(k, val);
+        break;
+      }
+      case "array":
+        this._patchArray(value as unknown[]);
+        break;
+      case "set": {
+        const want = new Map<string, unknown>();
+        for (const m of value as Set<unknown>) want.set(hashKey(m), m);
+        for (const k of Array.from((ytype as Y.Map<unknown>).keys())) {
+          if (!want.has(k)) (ytype as Y.Map<unknown>).delete(k);
+        }
+        for (const [hk, m] of want) {
+          if (!(ytype as Y.Map<unknown>).has(hk)) (ytype as Y.Map<unknown>).set(hk, encodeLeaf(m));
+        }
+        break;
+      }
+      case "map": {
+        const want = new Map<string, [unknown, unknown]>();
+        for (const [k, v] of value as Map<unknown, unknown>) want.set(hashKey(k), [k, v]);
+        for (const k of Array.from((ytype as Y.Map<unknown>).keys())) {
+          if (!want.has(k)) (ytype as Y.Map<unknown>).delete(k);
+        }
+        for (const [hk, [k, v]] of want) {
+          const cur = (ytype as Y.Map<[unknown, unknown]>).get(hk);
+          if (!cur || !deepEqual(decodeLeaf(cur[0]), k) || !deepEqual(decodeLeaf(cur[1]), v)) {
+            (ytype as Y.Map<unknown>).set(hk, [encodeLeaf(k), encodeLeaf(v)]);
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  private _patchArray(next: unknown[]): void {
+    const ya = this._ytype as Y.Array<unknown>;
+    const old = ya.toArray().map(decodeLeaf);
+    let p = 0;
+    while (p < old.length && p < next.length && deepEqual(old[p], next[p])) p++;
+    let s = 0;
+    while (
+      s < old.length - p &&
+      s < next.length - p &&
+      deepEqual(old[old.length - 1 - s], next[next.length - 1 - s])
+    ) {
+      s++;
+    }
+    const delCount = old.length - p - s;
+    const insItems = next.slice(p, next.length - s).map(encodeLeaf);
+    if (delCount > 0) ya.delete(p, delCount);
+    if (insItems.length > 0) ya.insert(p, insItems);
+  }
+
+  private _deleteKey(key: string): void {
+    const child = this._children.get(key);
+    if (child) {
+      child._detach();
+      this._children.delete(key);
+    }
+    if ((this._ytype as Y.Map<unknown>).has(key)) (this._ytype as Y.Map<unknown>).delete(key);
+  }
+
+  private _setKey(key: string, val: unknown): void {
+    const child = this._children.get(key);
+    if (val instanceof StoreValue) {
+      if (child === val) return;
+      this._deleteKey(key);
+      this._attachChild(key, val);
+      this._children.get(key)!._activateTree();
+      return;
+    }
+    if (child) {
+      child._detach();
+      this._children.delete(key);
+    }
+    const ymap = this._ytype as Y.Map<unknown>;
+    const cur = ymap.has(key) && !isYType(ymap.get(key)) ? decodeLeaf(ymap.get(key)) : NOTHING;
+    if (!deepEqual(cur, val)) ymap.set(key, encodeLeaf(val));
+  }
+
+  /** Revert this (formerly bound) subtree to unbound in-memory mode, keeping
+   * its last materialised value. Used when a parent replaces/removes a child:
+   * the orphaned handle keeps working locally but no longer touches the doc. */
+  private _detach(): void {
+    if (this._yobserver && this._ytype) this._ytype.unobserveDeep(this._yobserver);
+    this._yobserver = null;
+    for (const child of this._children.values()) child._detach();
+    this._bound = false;
+    this._ytype = null;
+    this._doc = null;
+    this._ownsDoc = false;
+    this._watchChildren(this._value);
+    this._shape = this._buildShape();
+  }
 }
+
+const NOTHING = Symbol("nothing");
