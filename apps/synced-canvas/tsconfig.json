@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "jsx": "react-jsx",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "paths": {
+      "@super-store/store": ["../../packages/store/src/index.ts"],
+      "@super-store/react": ["../../packages/react/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

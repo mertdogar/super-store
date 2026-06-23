@@ -1,0 +1,35 @@
+{
+  "name": "@super-store/example-synced-canvas",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,green \"tsx src/server.ts\" \"vite\"",
+    "dev:server": "tsx src/server.ts",
+    "dev:web": "vite",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@super-line/client": "^0.4.0",
+    "@super-line/core": "^0.4.0",
+    "@super-line/react": "^0.4.0",
+    "@super-line/server": "^0.4.0",
+    "@super-line/transport-websocket": "^0.4.0",
+    "@super-store/react": "workspace:*",
+    "@super-store/store": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "tsx": "^4.19.2",
+    "typescript": "~5.8.3",
+    "vite": "^5.4.11"
+  }
+}
