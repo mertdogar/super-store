@@ -101,6 +101,10 @@ export interface StoreValueOptions<T> {
    * (y-indexeddb, y-websocket, …) to this doc yourself. Omit for a private
    * in-memory doc that is created lazily on first Yjs access. */
   doc?: Y.Doc;
+  /** Track local writes for undo/redo. `true` (or an options object) attaches a
+   * Yjs UndoManager scoped to this root, tracking only this store's own writes.
+   * Off by default — UndoManager pins deleted content and disables GC. */
+  undo?: boolean | { captureTimeout?: number };
 }
 
 /**
@@ -148,6 +152,7 @@ export class StoreValue<T> {
   private _dirty = false;
   private _disposed = false;
   private _activated = false;
+  private _undoManager: Y.UndoManager | null = null;
 
   constructor(value: T, options?: StoreValueOptions<T>) {
     this._value = value;
@@ -167,6 +172,10 @@ export class StoreValue<T> {
       this._watchChildren(value);
       this._snapshot = this._buildSnapshot();
       this._shape = this._buildShape();
+    }
+
+    if (options?.undo) {
+      this.enableUndo(typeof options.undo === "object" ? options.undo : undefined);
     }
   }
 
@@ -285,12 +294,57 @@ export class StoreValue<T> {
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
+    if (this._undoManager) {
+      this._undoManager.destroy();
+      this._undoManager = null;
+    }
     if (this._yobserver && this._ytype) this._ytype.unobserveDeep(this._yobserver);
     this._yobserver = null;
     for (const child of this._children.values()) child.dispose();
     this._childUnsubs.forEach((u) => u());
     this._childUnsubs = [];
     if (this._ownsDoc && this._doc) this._doc.destroy();
+  }
+
+  // ─── Undo / redo (opt-in) ────────────────────────────────────────────────
+
+  /** Attach a Yjs UndoManager scoped to this root, tracking only this store's
+   * own (STORE_ORIGIN) writes — remote merges are never undone. Lazily binds to
+   * a private doc if unbound. Idempotent. `captureTimeout` (default 0) controls
+   * how aggressively consecutive writes merge into one undo step. */
+  enableUndo(options?: { captureTimeout?: number }): void {
+    if (this._disposed) throw new Error("StoreValue has been disposed");
+    if (!this._bound) this._bindRoot(new Y.Doc(), true);
+    if (this._undoManager) return;
+    this._undoManager = new Y.UndoManager(this._ytype!, {
+      trackedOrigins: new Set([STORE_ORIGIN]),
+      captureTimeout: options?.captureTimeout ?? 0,
+    });
+  }
+
+  /** Undo the last tracked local change. No-op if undo is not enabled. The
+   * resulting Yjs change flows through the normal observer, so listeners fire
+   * and the snapshot refreshes. */
+  undo(): void {
+    this._undoManager?.undo();
+  }
+
+  /** Redo the last undone change. No-op if undo is not enabled. */
+  redo(): void {
+    this._undoManager?.redo();
+  }
+
+  get canUndo(): boolean {
+    return this._undoManager?.canUndo() ?? false;
+  }
+
+  get canRedo(): boolean {
+    return this._undoManager?.canRedo() ?? false;
+  }
+
+  /** The underlying Yjs UndoManager, or null if undo is not enabled. */
+  get undoManager(): Y.UndoManager | null {
+    return this._undoManager;
   }
 
   select<R>(
