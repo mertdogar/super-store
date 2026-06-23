@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createSuperLineClient } from "@super-line/client";
 import { webSocketClientTransport } from "@super-line/transport-websocket";
-import { useStore } from "@super-store/react";
-import type { StoreValue } from "@super-store/store";
+import { useStore, useStoreSelector } from "@super-store/react";
+import { StoreValue } from "@super-store/store";
 import { canvas } from "./contract";
 import { Provider, useRequest } from "./hooks";
 import { useBoardSync } from "./sync";
@@ -21,6 +21,7 @@ import {
 
 const WS_URL = "ws://localhost:8788";
 const DOC_ID = "board";
+const GRID = 24;
 
 export function App() {
   const [name] = useState(() => `user-${Math.random().toString(36).slice(2, 6)}`);
@@ -31,7 +32,9 @@ export function App() {
       params: { name },
     }),
   );
-  const [board] = useState(() => createBoard());
+  // Undo is opt-in per root — only this client's own edits are tracked; remote
+  // merges are never undone.
+  const [board] = useState(() => createBoard({ undo: true }));
   useEffect(() => () => client.close(), [client]);
 
   return (
@@ -41,12 +44,33 @@ export function App() {
   );
 }
 
+// `useStoreSelector` re-renders this ONLY when the projection (the shape count)
+// changes, not on every drag. Wrapped in `memo` with a stable `board` prop, so a
+// parent re-render (which happens on every pointermove) doesn't reach it — the
+// "selector renders" counter visibly stays put while you drag.
+const ShapeCount = memo(function ShapeCount({ board }: { board: StoreValue<Board> }) {
+  const count = useStoreSelector(board, (s) => Object.keys(s).length);
+  const renders = useRef(0);
+  renders.current += 1;
+  return (
+    <span className="muted">
+      {count} shapes · selector renders: {renders.current}
+    </span>
+  );
+});
+
 function BoardView({ board, me }: { board: StoreValue<Board>; me: string }) {
   useBoardSync(board);
   const snapshot = useStore(board);
   const patches = usePatchLog(board);
   const shapes = readShapes(snapshot);
   const { call: serverNudge } = useRequest("serverNudge");
+
+  // Local-only, per-client UI state: an UNBOUND StoreValue that is never synced.
+  // Toggling snap-to-grid does not touch the collaborative doc.
+  const [ui] = useState(() => new StoreValue({ snap: false }));
+  const { snap } = useStore(ui);
+
   const boardRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ id: string; dx: number; dy: number } | null>(null);
 
@@ -65,8 +89,12 @@ function BoardView({ board, me }: { board: StoreValue<Board>; me: string }) {
     const d = drag.current;
     if (!d) return;
     const rect = boardRef.current?.getBoundingClientRect();
-    const x = Math.max(0, Math.round(e.clientX - (rect?.left ?? 0) - d.dx));
-    const y = Math.max(0, Math.round(e.clientY - (rect?.top ?? 0) - d.dy));
+    let x = Math.max(0, Math.round(e.clientX - (rect?.left ?? 0) - d.dx));
+    let y = Math.max(0, Math.round(e.clientY - (rect?.top ?? 0) - d.dy));
+    if (snap) {
+      x = Math.round(x / GRID) * GRID;
+      y = Math.round(y / GRID) * GRID;
+    }
     moveShape(board, d.id, x, y);
   };
 
@@ -79,9 +107,20 @@ function BoardView({ board, me }: { board: StoreValue<Board>; me: string }) {
       <header>
         <strong>synced canvas · super-store</strong>
         <span>
-          you are <b>{me}</b> · {shapes.length} shapes
+          you are <b>{me}</b> ·{" "}
         </span>
+        <ShapeCount board={board} />
         <div className="actions">
+          <label className="toggle">
+            <input type="checkbox" checked={snap} onChange={() => ui.set({ snap: !snap })} />
+            snap to grid
+          </label>
+          <button onClick={() => board.undo()} disabled={!board.canUndo}>
+            Undo
+          </button>
+          <button onClick={() => board.redo()} disabled={!board.canRedo}>
+            Redo
+          </button>
           <button onClick={() => addShape(board)}>Add shape</button>
           <button onClick={() => void serverNudge({ docId: DOC_ID }).catch(() => {})}>
             Server nudge
@@ -108,8 +147,8 @@ function BoardView({ board, me }: { board: StoreValue<Board>; me: string }) {
         <DebugPanel state={snapshot} patches={patches} />
       </div>
       <footer>
-        Open this page in two windows. Drag shapes, “Add shape”, hit “Server nudge”. State persists
-        on the server across reloads.
+        Open this page in two windows. Drag shapes, “Add shape”, hit “Server nudge”, then “Undo”.
+        State persists on the server across reloads.
       </footer>
     </div>
   );
