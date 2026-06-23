@@ -8,14 +8,14 @@ collaboration**, and **undone/redone** — all opt-in, all hidden behind the sam
 One runtime dependency: `yjs`. No React (see `@super-store/react` for hooks).
 
 ```ts
-import { StoreValue } from "@super-store/store"
+import { StoreValue } from "@super-store/store";
 
 // Works exactly like the in-memory store — zero config, fully local:
-const counter = new StoreValue(0)
-const unsub = counter.subscribe(() => console.log(counter.value))
-counter.set(1) // logs 1
-counter.set(1) // no-op
-unsub()
+const counter = new StoreValue(0);
+const unsub = counter.subscribe(() => console.log(counter.value));
+counter.set(1); // logs 1
+counter.set(1); // no-op
+unsub();
 ```
 
 ## Two backing modes
@@ -33,10 +33,10 @@ copied into a nested Y type and their handle repointed, preserving instance iden
 
 ```ts
 // Compose first, bind later — identity is preserved:
-const x = new StoreValue(1)
-const y = new StoreValue(2)
-const pos = new StoreValue({ x, y })   // x, y are adopted into pos's doc on bind
-pos.getSnapshot()                       // { x: 1, y: 2 }
+const x = new StoreValue(1);
+const y = new StoreValue(2);
+const pos = new StoreValue({ x, y }); // x, y are adopted into pos's doc on bind
+pos.getSnapshot(); // { x: 1, y: 2 }
 ```
 
 ## Persistence & collaboration
@@ -45,19 +45,19 @@ You own the `Y.Doc` and its providers — wire `y-indexeddb`, `y-websocket`, etc
 inject the doc. The store never touches providers.
 
 ```ts
-import * as Y from "yjs"
-import { IndexeddbPersistence } from "y-indexeddb"
-import { WebsocketProvider } from "y-websocket"
+import * as Y from "yjs";
+import { IndexeddbPersistence } from "y-indexeddb";
+import { WebsocketProvider } from "y-websocket";
 
-const doc = new Y.Doc()
-new IndexeddbPersistence("my-app", doc)        // offline
-new WebsocketProvider(WS_URL, "room-1", doc)   // real-time sync
+const doc = new Y.Doc();
+new IndexeddbPersistence("my-app", doc); // offline
+new WebsocketProvider(WS_URL, "room-1", doc); // real-time sync
 
 // Bind a root into the doc under a key. Provider data fills in as it syncs.
-const shapes = new StoreValue(initialShapes, { doc, name: "shapes" })
+const shapes = new StoreValue(initialShapes, { doc, name: "shapes" });
 
 // Local-only state (e.g. viewport) just omits the doc — never synced:
-const viewport = new StoreValue({ zoom: 1, pan: { x: 0, y: 0 } })
+const viewport = new StoreValue({ zoom: 1, pan: { x: 0, y: 0 } });
 ```
 
 Reads are synchronous and start from whatever the doc currently holds (empty/defaults until a
@@ -84,14 +84,14 @@ undo/redo) and `false` for ones injected via `applyUpdate` — so a sync layer p
 ```ts
 // push local edits up, apply fanned-out merges down — no `import * as Y`
 store.onUpdate((update, { local }) => {
-  if (local) bus.send({ update })
-})
-bus.on("update", ({ update }) => store.applyUpdate(update))
-bus.on("join", ({ snapshot }) => store.applyUpdate(snapshot)) // catch up
+  if (local) bus.send({ update });
+});
+bus.on("update", ({ update }) => store.applyUpdate(update));
+bus.on("join", ({ snapshot }) => store.applyUpdate(snapshot)); // catch up
 ```
 
-The bytes on the wire are still Yjs's update encoding (that *is* the CRDT), but the caller
-never sees it. See `apps/synced-canvas` for a full collaborative example. `applyUpdate` is
+The bytes on the wire are still Yjs's update encoding (that _is_ the CRDT), but the caller
+never sees it. See `examples/synced-canvas` for a full collaborative example. `applyUpdate` is
 tagged so an opt-in `UndoManager` never undoes a remote merge.
 
 ## Undo / redo
@@ -99,14 +99,14 @@ tagged so an opt-in `UndoManager` never undoes a remote merge.
 Opt-in per root. Off by default (the Yjs `UndoManager` disables GC for tracked types).
 
 ```ts
-const doc = new StoreValue(initial, { doc: ydoc, name: "doc", undo: true })
+const doc = new StoreValue(initial, { doc: ydoc, name: "doc", undo: true });
 // or: store.enableUndo({ captureTimeout: 0 })
 
-doc.set(next)
-doc.canUndo // true
-doc.undo()  // reverts; listeners fire, snapshot refreshes
-doc.redo()
-doc.undoManager // raw Y.UndoManager for advanced use
+doc.set(next);
+doc.canUndo; // true
+doc.undo(); // reverts; listeners fire, snapshot refreshes
+doc.redo();
+doc.undoManager; // raw Y.UndoManager for advanced use
 ```
 
 Only this store's own writes are tracked — **remote merges are never undone**.
@@ -115,46 +115,51 @@ Only this store's own writes are tracked — **remote merges are never undone**.
 
 ```ts
 class StoreValue<T> {
-  constructor(value: T, options?: {
-    isEqual?: (a: T, b: T) => boolean
-    name?: string                       // root key in the doc (also debug name)
-    debug?: boolean
-    doc?: Y.Doc                          // inject to persist/sync; omit for a lazy private doc
-    undo?: boolean | { captureTimeout?: number }
-  })
+  constructor(
+    value: T,
+    options?: {
+      isEqual?: (a: T, b: T) => boolean;
+      name?: string; // root key in the doc (also debug name)
+      debug?: boolean;
+      doc?: Y.Doc; // inject to persist/sync; omit for a lazy private doc
+      undo?: boolean | { captureTimeout?: number };
+    },
+  );
 
-  get value(): T                          // handle tree (nested children stay StoreValue)
-  set(value: T): boolean                  // diff-and-patch; true iff data actually changed
-  update(value: StoreUpdate<T>): boolean  // object stores only; recurses into child handles
-  subscribe(fn: () => void): () => void   // pre-bound
-  getSnapshot(): InferStoreValueSnapshot<T> // pre-bound, cached, reference-stable, fully unwrapped
-  emitChange(): void
-  select<R>(selector, isEqual?): { subscribe, getSnapshot }
+  get value(): T; // handle tree (nested children stay StoreValue)
+  set(value: T): boolean; // diff-and-patch; true iff data actually changed
+  update(value: StoreUpdate<T>): boolean; // object stores only; recurses into child handles
+  subscribe(fn: () => void): () => void; // pre-bound
+  getSnapshot(): InferStoreValueSnapshot<T>; // pre-bound, cached, reference-stable, fully unwrapped
+  emitChange(): void;
+  select<R>(selector, isEqual?): { subscribe; getSnapshot };
 
   // additive (Yjs powers; the core still presents the same shape):
-  encodeState(): Uint8Array               // full state for a snapshot / persistence
-  applyUpdate(update: Uint8Array): void   // merge a remote update; drives reactivity
-  onUpdate(cb: (update: Uint8Array, meta: { local: boolean }) => void): () => void
-  get doc(): Y.Doc                        // lazily binds; attach providers here
-  getYType(): Y.AbstractType<unknown>
-  enableUndo(opts?): void
-  undo(): void; redo(): void
-  get canUndo(): boolean; get canRedo(): boolean
-  get undoManager(): Y.UndoManager | null
-  dispose(): void
+  encodeState(): Uint8Array; // full state for a snapshot / persistence
+  applyUpdate(update: Uint8Array): void; // merge a remote update; drives reactivity
+  onUpdate(cb: (update: Uint8Array, meta: { local: boolean }) => void): () => void;
+  get doc(): Y.Doc; // lazily binds; attach providers here
+  getYType(): Y.AbstractType<unknown>;
+  enableUndo(opts?): void;
+  undo(): void;
+  redo(): void;
+  get canUndo(): boolean;
+  get canRedo(): boolean;
+  get undoManager(): Y.UndoManager | null;
+  dispose(): void;
 }
 ```
 
 ### Type mapping (bound mode)
 
-| `StoreValue<T>` kind | Yjs representation |
-|---|---|
-| scalar (`string`/`number`/`boolean`/`null`/`undefined`) | `Y.Map` value-cell `{ v }` |
-| plain object | `Y.Map` (one entry per key) |
-| array | `Y.Array` (prefix/suffix diff — concurrent edits merge) |
-| `Set` | `Y.Map<hash, member>` (conflict-free; type-preserving) |
-| `Map` | `Y.Map<hash, [key, value]>` (any key type) |
-| nested `StoreValue` | nested `Y.Map`/`Y.Array`, identity preserved |
+| `StoreValue<T>` kind                                    | Yjs representation                                      |
+| ------------------------------------------------------- | ------------------------------------------------------- |
+| scalar (`string`/`number`/`boolean`/`null`/`undefined`) | `Y.Map` value-cell `{ v }`                              |
+| plain object                                            | `Y.Map` (one entry per key)                             |
+| array                                                   | `Y.Array` (prefix/suffix diff — concurrent edits merge) |
+| `Set`                                                   | `Y.Map<hash, member>` (conflict-free; type-preserving)  |
+| `Map`                                                   | `Y.Map<hash, [key, value]>` (any key type)              |
+| nested `StoreValue`                                     | nested `Y.Map`/`Y.Array`, identity preserved            |
 
 Plain nested objects/arrays are stored opaquely (deep-cloned on write). `Set`/`Map`/`undefined`
 round-trip through tagged sentinels.
@@ -182,9 +187,9 @@ round-trip through tagged sentinels.
   a server-authoritative seed or an init flag for true concurrent first-write. (Sequential
   join — the normal provider flow — is fine.)
 - **Schema migrations and doc compaction are out of scope (v1).** Recipes:
-  - *Migrations:* keep a `schemaVersion` field in a root object and apply additive-only changes.
-  - *Compaction* (a hot-path store can grow): `const fresh = new Y.Doc(); Y.applyUpdate(fresh,
-    Y.encodeStateAsUpdate(doc))`. Note `UndoManager` disables GC, defeating compaction.
+  - _Migrations:_ keep a `schemaVersion` field in a root object and apply additive-only changes.
+  - _Compaction_ (a hot-path store can grow): `const fresh = new Y.Doc(); Y.applyUpdate(fresh,
+Y.encodeStateAsUpdate(doc))`. Note `UndoManager` disables GC, defeating compaction.
 - **Awareness/presence** is a separate concern — own a Yjs `Awareness` directly.
 
 ## Commands

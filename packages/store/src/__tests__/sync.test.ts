@@ -3,7 +3,7 @@ import { StoreValue } from "../store-value";
 
 // The sync surface: encodeState / applyUpdate / onUpdate. Moving CRDT bytes in
 // and out of a store with no Yjs import — the basis for collaboration and
-// persistence layered on top (see apps/synced-canvas).
+// persistence layered on top (see examples/synced-canvas).
 
 describe("sync surface", () => {
   it("encodeState -> applyUpdate converges two stores", () => {

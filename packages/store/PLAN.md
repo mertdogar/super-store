@@ -9,17 +9,17 @@ source of truth; `StoreValue` becomes a reactive handle over a Yjs shared type.
 
 ## Decisions locked (from the design interview)
 
-| # | Decision | Choice |
-|---|---|---|
-| Q1 | Why Yjs | Collaboration **+** offline persistence **+** undo/redo **+** CRDT foundation (all four) |
-| Q2 | Compat bar | **Source-compatible, Yjs hidden.** Same class/signatures; `value`/`getSnapshot` stay sync; new capability is additive-only |
-| Q3 | Doc unit | **One `Y.Doc` per root** by default; app may inject a shared doc |
-| Q4 | Binding | **Lazy binding**, cascading from root; children carry an in-memory value until adopted |
-| Q5 | Arrays | **Diff-and-patch** (merge-friendly), wholesale-replace only when totally different |
-| Q6 | Undo | **Opt-in per root**, exposed on the store, tracks local-origin edits |
-| Q7 | Providers | **Pure inject** — core never touches providers; app wires raw Yjs |
-| Q8 | React | **Separate `packages/react`** library |
-| — | Source of truth | **Yjs is authoritative**; `StoreValue` is a reactive handle (no in-memory mirror) |
+| #   | Decision        | Choice                                                                                                                     |
+| --- | --------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Q1  | Why Yjs         | Collaboration **+** offline persistence **+** undo/redo **+** CRDT foundation (all four)                                   |
+| Q2  | Compat bar      | **Source-compatible, Yjs hidden.** Same class/signatures; `value`/`getSnapshot` stay sync; new capability is additive-only |
+| Q3  | Doc unit        | **One `Y.Doc` per root** by default; app may inject a shared doc                                                           |
+| Q4  | Binding         | **Lazy binding**, cascading from root; children carry an in-memory value until adopted                                     |
+| Q5  | Arrays          | **Diff-and-patch** (merge-friendly), wholesale-replace only when totally different                                         |
+| Q6  | Undo            | **Opt-in per root**, exposed on the store, tracks local-origin edits                                                       |
+| Q7  | Providers       | **Pure inject** — core never touches providers; app wires raw Yjs                                                          |
+| Q8  | React           | **Separate `packages/react`** library                                                                                      |
+| —   | Source of truth | **Yjs is authoritative**; `StoreValue` is a reactive handle (no in-memory mirror)                                          |
 
 ## Architecture
 
@@ -35,27 +35,33 @@ packages/old-store                     untouched reference / conformance spec
 
 ```ts
 class StoreValue<T> {
-  constructor(value: T, options?: {
-    isEqual?: (a: T, b: T) => boolean
-    name?: string                 // root key in the doc; required when `doc` is injected, auto otherwise
-    debug?: boolean
-    doc?: Y.Doc                   // inject to persist/sync; omit -> private in-memory Y.Doc
-    undo?: boolean | { captureTimeout?: number }
-  })
-  get value(): T                                  // handle tree (nested children stay StoreValue instances)
-  set(value: T): boolean                          // diff-and-patch in one transaction
-  update(value: StoreUpdate<T>): boolean          // object-only; recurse into child handles in place
-  subscribe: (l: () => void) => () => void        // pre-bound
-  getSnapshot: () => InferStoreValueSnapshot<T>    // pre-bound, cached, reference-stable, fully unwrapped
-  emitChange(): void
-  select<R>(selector, isEqual?): { subscribe, getSnapshot }
+  constructor(
+    value: T,
+    options?: {
+      isEqual?: (a: T, b: T) => boolean;
+      name?: string; // root key in the doc; required when `doc` is injected, auto otherwise
+      debug?: boolean;
+      doc?: Y.Doc; // inject to persist/sync; omit -> private in-memory Y.Doc
+      undo?: boolean | { captureTimeout?: number };
+    },
+  );
+  get value(): T; // handle tree (nested children stay StoreValue instances)
+  set(value: T): boolean; // diff-and-patch in one transaction
+  update(value: StoreUpdate<T>): boolean; // object-only; recurse into child handles in place
+  subscribe: (l: () => void) => () => void; // pre-bound
+  getSnapshot: () => InferStoreValueSnapshot<T>; // pre-bound, cached, reference-stable, fully unwrapped
+  emitChange(): void;
+  select<R>(selector, isEqual?): { subscribe; getSnapshot };
   // additive (Yjs powers, still "hidden"):
-  enableUndo(opts?): void; undo(): void; redo(): void
-  get canUndo(): boolean; get canRedo(): boolean
-  readonly undoManager?: Y.UndoManager
-  get doc(): Y.Doc                                 // escape hatch (attach providers here)
-  getYType(): Y.AbstractType<unknown>             // escape hatch
-  dispose(): void
+  enableUndo(opts?): void;
+  undo(): void;
+  redo(): void;
+  get canUndo(): boolean;
+  get canRedo(): boolean;
+  readonly undoManager?: Y.UndoManager;
+  get doc(): Y.Doc; // escape hatch (attach providers here)
+  getYType(): Y.AbstractType<unknown>; // escape hatch
+  dispose(): void;
 }
 ```
 
@@ -73,15 +79,15 @@ One-way transition (unbound -> bound); no lasting dual source of truth.
 
 ### Type mapping (each node = one named Yjs type; scalars can't be doc roots)
 
-| Kind | Yjs representation | Notes |
-|---|---|---|
-| scalar | `Y.Map` value-cell `{ v }` | `undefined` stored as a present value, never conflated with delete |
-| plain object | `Y.Map` | diff-and-patch keys |
-| array | `Y.Array` | diff-and-patch (Q5) |
-| Map (string keys) | `Y.Map` -> rebuilt as `Map` in snapshot | |
-| Map (non-string keys) | `Y.Array` of `[k,v]` pairs | per-key merge lost (documented) |
-| Set | `Y.Map<member,true>` | concurrent adds converge; rebuilt as `Set` in snapshot |
-| nested `StoreValue` | nested `Y.Map`/`Y.Array` | identity = the nested Y instance; in-place on `update`, rebuild on `set` |
+| Kind                  | Yjs representation                      | Notes                                                                    |
+| --------------------- | --------------------------------------- | ------------------------------------------------------------------------ |
+| scalar                | `Y.Map` value-cell `{ v }`              | `undefined` stored as a present value, never conflated with delete       |
+| plain object          | `Y.Map`                                 | diff-and-patch keys                                                      |
+| array                 | `Y.Array`                               | diff-and-patch (Q5)                                                      |
+| Map (string keys)     | `Y.Map` -> rebuilt as `Map` in snapshot |                                                                          |
+| Map (non-string keys) | `Y.Array` of `[k,v]` pairs              | per-key merge lost (documented)                                          |
+| Set                   | `Y.Map<member,true>`                    | concurrent adds converge; rebuilt as `Set` in snapshot                   |
+| nested `StoreValue`   | nested `Y.Map`/`Y.Array`                | identity = the nested Y instance; in-place on `update`, rebuild on `set` |
 
 ### Reads
 
@@ -120,10 +126,14 @@ Off by default because `UndoManager` pins deleted content and disables GC.
 ## `@super-store/react`
 
 ```ts
-function useStore<T>(sv: StoreValue<T>): InferStoreValueSnapshot<T>
+function useStore<T>(sv: StoreValue<T>): InferStoreValueSnapshot<T>;
 // = useSyncExternalStore(sv.subscribe, sv.getSnapshot)
 
-function useStoreSelector<T, R>(sv: StoreValue<T>, selector: (s: InferStoreValueSnapshot<T>) => R, isEqual?: (a: R, b: R) => boolean): R
+function useStoreSelector<T, R>(
+  sv: StoreValue<T>,
+  selector: (s: InferStoreValueSnapshot<T>) => R,
+  isEqual?: (a: R, b: R) => boolean,
+): R;
 // = useSyncExternalStoreWithSelector(...)
 ```
 

@@ -15,11 +15,11 @@ Subscribe a component to a store. Returns the resolved snapshot (nested `StoreVa
 unwrapped) and re-renders on change.
 
 ```tsx
-import { useStore } from "@super-store/react"
+import { useStore } from "@super-store/react";
 
 function Counter({ store }: { store: StoreValue<number> }) {
-  const n = useStore(store)
-  return <button onClick={() => store.set(n + 1)}>{n}</button>
+  const n = useStore(store);
+  return <button onClick={() => store.set(n + 1)}>{n}</button>;
 }
 ```
 
@@ -32,16 +32,16 @@ Subscribe to a projection. The component re-renders only when `selector(snapshot
 `isEqual` (default `Object.is`), even though the store emits on every change.
 
 ```tsx
-import { useStoreSelector } from "@super-store/react"
+import { useStoreSelector } from "@super-store/react";
 
 function ZoomLabel({ store }: { store: StoreValue<{ zoom: number; pan: Point }> }) {
   // Re-renders only when `zoom` changes, not on pan.
-  const zoom = useStoreSelector(store, (s) => s.zoom)
-  return <span>{Math.round(zoom * 100)}%</span>
+  const zoom = useStoreSelector(store, (s) => s.zoom);
+  return <span>{Math.round(zoom * 100)}%</span>;
 }
 
 // Custom comparator for object/array projections:
-const items = useStoreSelector(store, (s) => s.items, shallowArrayEqual)
+const items = useStoreSelector(store, (s) => s.items, shallowArrayEqual);
 ```
 
 Built on `useSyncExternalStoreWithSelector`, so it correctly handles unstable inline selectors.

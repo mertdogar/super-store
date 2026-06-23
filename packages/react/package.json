@@ -1,26 +1,54 @@
 {
   "name": "@super-store/react",
   "version": "0.1.0",
-  "private": true,
+  "description": "React hooks for @super-store/store — useStore and useStoreSelector, tear-free over useSyncExternalStore.",
+  "keywords": [
+    "crdt",
+    "hooks",
+    "react",
+    "reactive",
+    "state",
+    "store",
+    "super-store",
+    "typescript"
+  ],
+  "homepage": "https://mertdogar.github.io/super-store/",
+  "bugs": "https://github.com/mertdogar/super-store/issues",
+  "license": "MIT",
+  "author": "Mert",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mertdogar/super-store.git",
+    "directory": "packages/react"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
-  "main": "./src/index.ts",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./src/index.ts"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json --noCheck",
-    "build:watch": "tsc -p tsconfig.json --noCheck --watch",
-    "prepare": "tsc -p tsconfig.json --noCheck",
+    "build": "tsup",
+    "prepublishOnly": "tsup",
     "test": "vitest run",
     "test:watch": "vitest"
-  },
-  "peerDependencies": {
-    "@super-store/store": "workspace:*",
-    "react": ">=18"
   },
   "dependencies": {
     "use-sync-external-store": "^1.4.0"
@@ -28,14 +56,19 @@
   "devDependencies": {
     "@super-store/store": "workspace:*",
     "@testing-library/react": "^16.1.0",
-    "@types/node": "^25.6.0",
     "@types/react": "^19.0.0",
     "@types/use-sync-external-store": "^1.5.0",
     "jsdom": "^25.0.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "typescript": "~5.8.3",
     "vitest": "^4.1.2",
     "yjs": "^13.6.27"
+  },
+  "peerDependencies": {
+    "@super-store/store": "workspace:^",
+    "react": ">=18"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

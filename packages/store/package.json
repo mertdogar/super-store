@@ -1,20 +1,53 @@
 {
   "name": "@super-store/store",
   "version": "0.1.0",
-  "private": true,
+  "description": "A reactive store primitive backed by a Yjs CRDT — local, real-time collaborative, persistent and undoable, behind one in-memory-style API.",
+  "keywords": [
+    "collaboration",
+    "crdt",
+    "offline",
+    "reactive",
+    "state",
+    "store",
+    "typescript",
+    "undo",
+    "yjs"
+  ],
+  "homepage": "https://mertdogar.github.io/super-store/",
+  "bugs": "https://github.com/mertdogar/super-store/issues",
+  "license": "MIT",
+  "author": "Mert",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mertdogar/super-store.git",
+    "directory": "packages/store"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
-  "main": "./src/index.ts",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./src/index.ts"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json --noCheck",
-    "build:watch": "tsc -p tsconfig.json --noCheck --watch",
-    "prepare": "tsc -p tsconfig.json --noCheck",
+    "build": "tsup",
+    "prepublishOnly": "tsup",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -22,9 +55,10 @@
     "yjs": "^13.6.27"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0",
     "@vitest/ui": "^4.1.4",
-    "typescript": "~5.8.3",
     "vitest": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

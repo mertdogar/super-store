@@ -43,7 +43,7 @@ describe("undo — opt-in via constructor option", () => {
   });
 
   it("captureTimeout 0 gives per-set undo steps", () => {
-    const s = new StoreValue<number[]>([], { doc: new Y.Doc(), name: "l", undo: true });
+    const s = new StoreValue<string[]>([], { doc: new Y.Doc(), name: "l", undo: true });
     s.set(["a"]);
     s.set(["a", "b"]);
     s.undo();
