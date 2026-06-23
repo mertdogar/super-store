@@ -5,6 +5,13 @@ import { decodeLeaf, deepEqual, encodeLeaf, hashKey, isYType } from "./codec";
  * UndoManager) can distinguish local store writes from remote merges. */
 export const STORE_ORIGIN = Symbol.for("@super-store/store");
 
+/** Origin tag for updates injected through `applyUpdate()`. `onUpdate` reports
+ * `local: origin !== APPLY_ORIGIN`, so every locally-produced update (a user
+ * write tagged STORE_ORIGIN, or an undo/redo tagged by the UndoManager) is
+ * `local`, and only applied remote merges are not — which is exactly what a
+ * sync layer needs to break echoes without ever seeing a Yjs origin. */
+const APPLY_ORIGIN = Symbol.for("@super-store/store/applied");
+
 /**
  * The resolved snapshot view of `T`: every nested `StoreValue<V>` field is
  * unwrapped to its inner `V`. Returned by `getSnapshot()`, which is what
@@ -196,6 +203,45 @@ export class StoreValue<T> {
     if (this._disposed) throw new Error("StoreValue has been disposed");
     if (!this._bound) this._bindRoot(new Y.Doc(), true);
     return this._ytype!;
+  }
+
+  // ─── Sync surface (collaboration / persistence without importing Yjs) ────
+  // These three let a sync layer move CRDT bytes in and out of the store
+  // without touching the Yjs namespace. The bytes are still Yjs's update
+  // encoding (that *is* the CRDT) — but the caller never sees `Y.*`. Each
+  // lazily binds to a private doc, like `.doc`.
+
+  /** The full document state as a single update, for a catch-up snapshot or
+   * persistence. Apply it to another store with `applyUpdate`. */
+  encodeState(): Uint8Array {
+    if (this._disposed) throw new Error("StoreValue has been disposed");
+    if (!this._bound) this._bindRoot(new Y.Doc(), true);
+    return Y.encodeStateAsUpdate(this._doc!);
+  }
+
+  /** Merge an update produced by another store's `encodeState`/`onUpdate`.
+   * Tagged so `onUpdate` reports it as not-local (it must not be echoed back),
+   * and so an opt-in UndoManager never undoes a remote merge. Drives reactivity
+   * (snapshot rebuild + listeners) exactly like a local write. */
+  applyUpdate(update: Uint8Array): void {
+    if (this._disposed) throw new Error("StoreValue has been disposed");
+    if (!this._bound) this._bindRoot(new Y.Doc(), true);
+    Y.applyUpdate(this._doc!, update, APPLY_ORIGIN);
+  }
+
+  /** Observe outgoing CRDT updates. `meta.local` is `true` for changes this
+   * store produced (user writes and undo/redo) and `false` for ones injected
+   * via `applyUpdate` — so a sync layer pushes only `local` updates and avoids
+   * echoing remote merges. Returns an unsubscribe. */
+  onUpdate(listener: (update: Uint8Array, meta: { local: boolean }) => void): () => void {
+    if (this._disposed) throw new Error("StoreValue has been disposed");
+    if (!this._bound) this._bindRoot(new Y.Doc(), true);
+    const doc = this._doc!;
+    const handler = (update: Uint8Array, origin: unknown) => {
+      listener(update, { local: origin !== APPLY_ORIGIN });
+    };
+    doc.on("update", handler);
+    return () => doc.off("update", handler);
   }
 
   /**

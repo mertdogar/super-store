@@ -66,6 +66,34 @@ provider syncs), then update reactively. If you want a loading gate, gate on you
 a session), the **document wins** — the initial value is ignored and the existing state is
 adopted.
 
+### Syncing over your own transport (no Yjs import)
+
+Instead of attaching a Yjs provider, you can relay updates over any transport — a
+WebSocket bus, a server you control — using three methods that never expose `Y.*`:
+
+```ts
+encodeState(): Uint8Array                 // full state, for a catch-up snapshot or to persist
+applyUpdate(update: Uint8Array): void     // merge an update from a peer; drives reactivity
+onUpdate(cb): () => void                  // observe outgoing updates; cb(update, { local })
+```
+
+`onUpdate`'s `meta.local` is `true` for updates this store produced (user writes **and**
+undo/redo) and `false` for ones injected via `applyUpdate` — so a sync layer pushes only
+`local` updates and never echoes a remote merge back:
+
+```ts
+// push local edits up, apply fanned-out merges down — no `import * as Y`
+store.onUpdate((update, { local }) => {
+  if (local) bus.send({ update })
+})
+bus.on("update", ({ update }) => store.applyUpdate(update))
+bus.on("join", ({ snapshot }) => store.applyUpdate(snapshot)) // catch up
+```
+
+The bytes on the wire are still Yjs's update encoding (that *is* the CRDT), but the caller
+never sees it. See `apps/synced-canvas` for a full collaborative example. `applyUpdate` is
+tagged so an opt-in `UndoManager` never undoes a remote merge.
+
 ## Undo / redo
 
 Opt-in per root. Off by default (the Yjs `UndoManager` disables GC for tracked types).
@@ -104,6 +132,9 @@ class StoreValue<T> {
   select<R>(selector, isEqual?): { subscribe, getSnapshot }
 
   // additive (Yjs powers; the core still presents the same shape):
+  encodeState(): Uint8Array               // full state for a snapshot / persistence
+  applyUpdate(update: Uint8Array): void   // merge a remote update; drives reactivity
+  onUpdate(cb: (update: Uint8Array, meta: { local: boolean }) => void): () => void
   get doc(): Y.Doc                        // lazily binds; attach providers here
   getYType(): Y.AbstractType<unknown>
   enableUndo(opts?): void

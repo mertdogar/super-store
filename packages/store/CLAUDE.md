@@ -47,6 +47,11 @@ populate and hydrate paths share it.
 - **Never gate the observer (`_onYChange`) on `isEqual`** — it stales the snapshot. No-op
   suppression belongs at `set()`/`update()` entry only.
 - **`codec.ts` stays free of any `StoreValue` import** — pure functions.
+- **The sync surface (`encodeState`/`applyUpdate`/`onUpdate`) hides Yjs origins.** `applyUpdate`
+  tags merges with `APPLY_ORIGIN`; `onUpdate` reports `local = origin !== APPLY_ORIGIN`. So
+  *everything not injected via `applyUpdate`* — user writes (STORE_ORIGIN) and undo/redo
+  (UndoManager origin) — is `local:true`. Don't redefine `local` as `=== STORE_ORIGIN`: that
+  would stop undos from propagating to peers.
 
 ## Gotchas
 
