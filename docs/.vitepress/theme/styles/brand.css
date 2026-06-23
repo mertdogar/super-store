@@ -1,0 +1,21 @@
+/* super-store — violet brand identity over the VitePress default theme.
+   AA-verified brand tokens in both light and dark. */
+
+:root {
+  --vp-c-brand-1: #6d28d9; /* violet-700 — link/brand text, clears AA on white */
+  --vp-c-brand-2: #7c3aed; /* violet-600 — hover */
+  --vp-c-brand-3: #6d28d9; /* solid button bg — white text clears AA */
+  --vp-c-brand-soft: rgba(124, 58, 237, 0.1);
+
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #7c3aed, #2563eb);
+  --vp-home-hero-image-background-image: linear-gradient(120deg, #7c3aed55, #2563eb55);
+  --vp-home-hero-image-filter: blur(44px);
+}
+
+.dark {
+  --vp-c-brand-1: #a78bfa; /* violet-400 — link/brand text on dark */
+  --vp-c-brand-2: #8b5cf6; /* violet-500 — hover */
+  --vp-c-brand-3: #7c3aed; /* solid button bg */
+  --vp-c-brand-soft: rgba(139, 92, 246, 0.16);
+}

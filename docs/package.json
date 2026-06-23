@@ -1,0 +1,19 @@
+{
+  "name": "@super-store/docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "api": "typedoc",
+    "dev": "pnpm api && vitepress dev",
+    "build": "pnpm api && vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "typedoc": "^0.28.0",
+    "typedoc-plugin-markdown": "^4.12.0",
+    "typedoc-vitepress-theme": "^1.1.2",
+    "vitepress": "^1.6.3",
+    "vitepress-plugin-llms": "^1.13.2"
+  }
+}
