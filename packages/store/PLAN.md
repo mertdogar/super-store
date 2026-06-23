@@ -4,6 +4,9 @@ A Yjs-backed reactive store that replaces the in-memory `StoreValue<T>` primitiv
 (`packages/old-store`) with **minor tweaks** to the public API. Yjs is the single
 source of truth; `StoreValue` becomes a reactive handle over a Yjs shared type.
 
+> **Status: implemented (M1–M6 complete).** See `README.md` for the shipped API and
+> the behavioral deltas. This file is retained as the design/decision record.
+
 ## Decisions locked (from the design interview)
 
 | # | Decision | Choice |
