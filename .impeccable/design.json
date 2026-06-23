@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-23T00:00:00.000Z",
+  "title": "Design System: super-store docs",
+  "extensions": {
+    "colorMeta": {
+      "signal-violet": {
+        "role": "primary",
+        "displayName": "Signal Violet",
+        "canonical": "#6d28d9",
+        "tonalRamp": ["#2e1065", "#4c1d95", "#5b21b6", "#6d28d9", "#7c3aed", "#8b5cf6", "#a78bfa", "#c4b5fd"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#3c3c43",
+        "tonalRamp": ["#1b1b1f", "#2e2e32", "#3c3c43", "#515c67", "#67676c", "#98989f", "#c2c2c4", "#f6f6f7"]
+      },
+      "surface-alt": {
+        "role": "neutral",
+        "displayName": "Surface Alt",
+        "canonical": "#f6f6f7",
+        "tonalRamp": ["#161618", "#1b1b1f", "#202127", "#32363f", "#67676c", "#c2c2c4", "#e2e2e3", "#f6f6f7"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Home hero name only; capped under 6rem." },
+      "headline": { "displayName": "Headline", "purpose": "Page h1 and major section heads." },
+      "body": { "displayName": "Body", "purpose": "Prose, held at 65–75ch." },
+      "code": { "displayName": "Code", "purpose": "Inline code and code blocks — the hero content." }
+    },
+    "shadows": [
+      { "name": "ambient-hairline", "value": "0 1px 2px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06)", "purpose": "Sticky nav separation only." },
+      { "name": "hover-lift", "value": "0 3px 12px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.07)", "purpose": "Feature cards and dropdowns on hover/open." }
+    ],
+    "motion": [
+      { "name": "ease-state", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Default ease-out for color/state transitions, ~0.2s. Crossfade fallback under prefers-reduced-motion." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "960px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Brand Button",
+      "kind": "button",
+      "refersTo": "button-brand",
+      "description": "The single primary action per view (e.g. Get started).",
+      "html": "<button class=\"ds-btn-brand\">Get started</button>",
+      "css": ".ds-btn-brand { display: inline-flex; align-items: center; height: 40px; padding: 0 20px; background: #6d28d9; color: #fff; font: 500 0.8125rem/1 Inter, ui-sans-serif, system-ui, sans-serif; border: none; border-radius: 20px; cursor: pointer; transition: background 0.2s cubic-bezier(0.16,1,0.3,1); } .ds-btn-brand:hover { background: #7c3aed; } .ds-btn-brand:focus-visible { outline: 2px solid #6d28d9; outline-offset: 2px; }"
+    },
+    {
+      "name": "Alt Button",
+      "kind": "button",
+      "refersTo": "button-alt",
+      "description": "Secondary actions (Why super-store, GitHub).",
+      "html": "<button class=\"ds-btn-alt\">Why super-store</button>",
+      "css": ".ds-btn-alt { display: inline-flex; align-items: center; height: 40px; padding: 0 20px; background: #f6f6f7; color: #3c3c43; font: 500 0.8125rem/1 Inter, ui-sans-serif, system-ui, sans-serif; border: none; border-radius: 20px; cursor: pointer; transition: background 0.2s cubic-bezier(0.16,1,0.3,1); } .ds-btn-alt:hover { background: #e2e2e3; } .ds-btn-alt:focus-visible { outline: 2px solid #6d28d9; outline-offset: 2px; }"
+    },
+    {
+      "name": "Feature Card",
+      "kind": "card",
+      "refersTo": "feature-card",
+      "description": "Landing-page feature box; flat at rest, lifts on hover. Never nested.",
+      "html": "<article class=\"ds-card\"><h3 class=\"ds-card-title\">One API, two modes</h3><p class=\"ds-card-body\">A StoreValue is a plain in-memory value until it isn't. Bind a doc and the same handle becomes a CRDT.</p></article>",
+      "css": ".ds-card { background: #f6f6f7; border-radius: 12px; padding: 24px; transition: box-shadow 0.2s cubic-bezier(0.16,1,0.3,1); } .ds-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.07); } .ds-card-title { margin: 0 0 8px; font: 600 1.125rem/1.4 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: -0.01em; color: #3c3c43; } .ds-card-body { margin: 0; font: 400 0.9375rem/1.6 Inter, ui-sans-serif, system-ui, sans-serif; color: #67676c; }"
+    },
+    {
+      "name": "Code Block",
+      "kind": "custom",
+      "refersTo": "code-block",
+      "description": "The hero content. Quiet surface so syntax highlighting carries the meaning.",
+      "html": "<pre class=\"ds-code\"><code>const counter = new StoreValue(0)\ncounter.set(1) <span class=\"ds-cmt\">// logs 1</span></code></pre>",
+      "css": ".ds-code { margin: 0; background: #f6f6f7; border: 1px solid #e2e2e3; border-radius: 8px; padding: 16px 24px; overflow-x: auto; font: 400 0.875em/1.7 ui-monospace, Menlo, Monaco, Consolas, monospace; color: #3c3c43; } .ds-code .ds-cmt { color: #98989f; }"
+    },
+    {
+      "name": "Nav Item",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "Top-nav link; active item is the only Signal Violet on the bar.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-active\" href=\"#\">Guide</a><a class=\"ds-nav-item\" href=\"#\">Reference</a><a class=\"ds-nav-item\" href=\"#\">Examples</a></nav>",
+      "css": ".ds-nav { display: inline-flex; gap: 24px; } .ds-nav-item { font: 500 0.8125rem/1.4 Inter, ui-sans-serif, system-ui, sans-serif; color: #67676c; text-decoration: none; transition: color 0.2s cubic-bezier(0.16,1,0.3,1); } .ds-nav-item:hover { color: #3c3c43; } .ds-nav-item.ds-active { color: #6d28d9; } .ds-nav-item:focus-visible { outline: 2px solid #6d28d9; outline-offset: 4px; border-radius: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Instrument",
+    "overview": "The super-store docs read like a precise tool that hides its effort. The library's pitch is that a StoreValue looks like plain in-memory state until you bind a document — and the design honors that exact restraint. The surface is calm, near-monochrome, and code-forward; the one violet accent does the signalling and nothing else carries decoration. Power is felt in the legibility of a snippet and the exactness of a guarantee, never announced with gradients, glows, or motion spectacle. This is a brand surface: the public face of an OSS library, where a skeptical engineer decides in seconds whether to trust it. The design's job is trust through precision.",
+    "keyCharacteristics": [
+      "Code is the hero; chrome recedes.",
+      "One violet accent, used sparingly and deliberately.",
+      "Near-monochrome neutral surface, AA-legible in both light and dark.",
+      "Flat by default; depth appears only as a response to interaction.",
+      "Quiet, exact, engineer-to-engineer voice."
+    ],
+    "rules": [
+      { "name": "The One Voice Rule", "body": "Signal Violet appears on ≤10% of any screen — links, one CTA, the active nav item. Its rarity is what makes it read as signal.", "section": "colors" },
+      { "name": "The Gradient-Is-Sacred Rule", "body": "The violet→blue gradient exists only on the hero name. Gradient text anywhere else is prohibited.", "section": "colors" },
+      { "name": "The Single-Family Rule", "body": "One sans (Inter) plus one mono. Contrast comes from weight and scale, never from a third font.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Surfaces are flat at rest. A shadow appears only as feedback to hover, focus, or elevation.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do make code the hero — give snippets room, strong syntax legibility, and never let chrome compete.",
+      "Do keep Signal Violet to ≤10% of any screen (links, one CTA, active nav).",
+      "Do keep surfaces flat at rest; reveal a shadow only on hover/focus/open.",
+      "Do hold body text at 65–75ch and ≥4.5:1 contrast in both themes; muted text still clears AA.",
+      "Do honor prefers-reduced-motion: reduce with a crossfade or instant fallback on every transition."
+    ],
+    "donts": [
+      "Don't ship a generic VitePress default — a swapped accent over the stock theme is not an identity.",
+      "Don't drift into crypto/web3 maximalism: no neon glows, heavy glassmorphism, animated noise, or dark-only spectacle.",
+      "Don't clutter — no badge soup, no competing accents, no side-stripe borders, no decorative noise.",
+      "Don't use gradient text anywhere but the home hero name.",
+      "Don't introduce a second accent hue or a third font.",
+      "Don't nest cards or add a resting drop shadow to a card."
+    ]
+  }
+}

@@ -9,6 +9,9 @@
     "build": "pnpm api && vitepress build",
     "preview": "vitepress preview"
   },
+  "dependencies": {
+    "@super-store/store": "workspace:*"
+  },
   "devDependencies": {
     "typedoc": "^0.28.0",
     "typedoc-plugin-markdown": "^4.12.0",
