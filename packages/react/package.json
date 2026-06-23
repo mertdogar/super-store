@@ -1,0 +1,41 @@
+{
+  "name": "@super-store/react",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noCheck",
+    "build:watch": "tsc -p tsconfig.json --noCheck --watch",
+    "prepare": "tsc -p tsconfig.json --noCheck",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "@super-store/store": "workspace:*",
+    "react": ">=18"
+  },
+  "dependencies": {
+    "use-sync-external-store": "^1.4.0"
+  },
+  "devDependencies": {
+    "@super-store/store": "workspace:*",
+    "@testing-library/react": "^16.1.0",
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.0.0",
+    "@types/use-sync-external-store": "^1.5.0",
+    "jsdom": "^25.0.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "~5.8.3",
+    "vitest": "^4.1.2",
+    "yjs": "^13.6.27"
+  }
+}
