@@ -19,3 +19,74 @@
   --vp-c-brand-3: #7c3aed; /* solid button bg */
   --vp-c-brand-soft: rgba(139, 92, 246, 0.16);
 }
+
+/* Home features: break the uniform 6-up grid into a 2-featured + 4-supporting
+   composition so the page reads as a deliberate hierarchy, not a stock card grid. */
+@media (min-width: 640px) {
+  .VPHome .VPFeatures .container .items {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 24px;
+  }
+  .VPHome .VPFeatures .container .items .item {
+    width: 100% !important;
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  .VPHome .VPFeatures .container .items .item:nth-child(-n + 2) {
+    grid-column: span 6; /* two featured cards lead */
+  }
+  .VPHome .VPFeatures .container .items .item:nth-child(n + 3) {
+    grid-column: span 6; /* supporting cards, two-up on tablet */
+  }
+}
+@media (min-width: 960px) {
+  .VPHome .VPFeatures .container .items .item:nth-child(n + 3) {
+    grid-column: span 3; /* supporting cards, four-up on desktop */
+  }
+}
+/* The single headline feature carries the one brand tint; titles on the
+   featured pair step up in size to earn the extra room. */
+.VPHome .VPFeatures .item:first-child .VPFeature {
+  background: var(--vp-c-brand-soft);
+  border-color: transparent;
+}
+.VPHome .VPFeatures .item:nth-child(-n + 2) .VPFeature .title {
+  font-size: 18px;
+}
+/* Body text on the brand-tinted card uses the background's own hue (deep violet),
+   not washed-out neutral gray. Values are signal-violet tonal-ramp steps. */
+.VPHome .VPFeatures .item:first-child .VPFeature .details {
+  color: #4c1d95;
+}
+.dark .VPHome .VPFeatures .item:first-child .VPFeature .details {
+  color: #c4b5fd;
+}
+
+/* The hero code panel is taller than VitePress's fixed 320px image box, so on
+   tablet/mobile let it flow naturally below the hero copy instead of bleeding
+   over it. Desktop (>=960px) keeps VitePress's side-by-side layout. */
+@media (max-width: 959px) {
+  .VPHero .image {
+    order: 2;
+    margin: 8px 0 0;
+    width: 100%;
+  }
+  .VPHero .image-container {
+    width: 100%;
+    height: auto;
+    max-width: 480px;
+  }
+  .VPHero .image-bg {
+    display: none;
+  }
+}
+
+/* P3: mobile CTA buttons hit the 44px touch-target floor. */
+@media (max-width: 639px) {
+  .VPHome .VPButton.medium {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
