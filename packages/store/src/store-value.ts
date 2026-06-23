@@ -147,6 +147,7 @@ export class StoreValue<T> {
    * set()/update() can report (and emit on) genuine change only. */
   private _dirty = false;
   private _disposed = false;
+  private _activated = false;
 
   constructor(value: T, options?: StoreValueOptions<T>) {
     this._value = value;
@@ -367,10 +368,20 @@ export class StoreValue<T> {
     this._childUnsubs.forEach((u) => u());
     this._childUnsubs = [];
     this._ytype = this._yKind === "array" ? doc.getArray(this._rootKey) : doc.getMap(this._rootKey);
-    // M2 assumes a fresh doc. (Hydrating from an already-populated doc — the
-    // remote/persistence case — is handled in M3.)
-    doc.transact(() => this._populateTree(), STORE_ORIGIN);
+    // Seed the initial value only into an EMPTY doc. If the doc already holds
+    // data (persistence reload, or joining a session whose state was applied
+    // before construction), the doc is the source of truth: skip the seed and
+    // hydrate from it (_activateTree adopts the existing structure). The
+    // initial value is then ignored — document-wins, the standard CRDT join.
+    if (this._isEmptyRoot()) {
+      doc.transact(() => this._populateTree(), STORE_ORIGIN);
+    }
     this._activateTree();
+  }
+
+  private _isEmptyRoot(): boolean {
+    const ytype = this._ytype!;
+    return ytype instanceof Y.Array ? ytype.length === 0 : (ytype as Y.Map<unknown>).size === 0;
   }
 
   /** Write `_value` into `_ytype`, recursing into and binding child handles.
@@ -403,8 +414,14 @@ export class StoreValue<T> {
   }
 
   /** Materialise `_value` from `_ytype`, attach the deep observer, recurse into
-   * children. Must run AFTER the populate transaction has committed. */
+   * children. Idempotent (guarded by `_activated`) so it can be called both for
+   * freshly-populated children and for children adopted from an existing doc.
+   * Must run AFTER the populate transaction has committed. */
   private _activateTree(): void {
+    if (this._activated) return;
+    // Adopt any nested Y types that are not yet tracked as child handles
+    // (the hydrate path: a populated doc whose children we did not create).
+    this._reconcileChildren();
     this._value = this._materialize();
     this._shape = this._buildShape();
     // Activate children first so their `_value` is materialised before this
@@ -414,6 +431,7 @@ export class StoreValue<T> {
     this._snapshot = this._buildSnapshot();
     this._yobserver = () => this._onYChange();
     this._ytype!.observeDeep(this._yobserver);
+    this._activated = true;
   }
 
   /** Create a nested Y type for a child, integrate it, populate it. Does not
@@ -434,6 +452,49 @@ export class StoreValue<T> {
     child._childUnsubs = [];
     child._populateTree();
     this._children.set(key, child);
+  }
+
+  /** Reconcile child handles against the nested Y types actually present under
+   * this object's Y.Map: adopt newly-appeared subtrees (hydration / remote
+   * merge) and detach ones that vanished. Adopted children are created un-
+   * activated; the caller activates them. Returns true if anything changed. */
+  private _reconcileChildren(): boolean {
+    if (this._yKind !== "object") return false;
+    const ymap = this._ytype as Y.Map<unknown>;
+    let changed = false;
+    for (const k of ymap.keys()) {
+      const v = ymap.get(k);
+      if (isYType(v) && !this._children.has(k)) {
+        this._children.set(k, StoreValue._adopt(v, this._doc!));
+        changed = true;
+      }
+    }
+    for (const [k, child] of Array.from(this._children)) {
+      const v = ymap.has(k) ? ymap.get(k) : undefined;
+      if (!isYType(v)) {
+        child._detach();
+        this._children.delete(k);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /** Build an un-activated child handle bound to an already-populated Y type
+   * (no seed). Kind is inferred from the Y type: Y.Array -> array, Y.Map ->
+   * object. (A remotely-added Set/Map/scalar child encoded as a Y.Map cannot be
+   * distinguished and is treated as an object — a documented limitation for the
+   * rare cross-schema case; the common object/array children adopt correctly.) */
+  private static _adopt(ytype: Y.AbstractType<unknown>, doc: Y.Doc): StoreValue<unknown> {
+    const placeholder = ytype instanceof Y.Array ? [] : {};
+    const sv = new StoreValue<unknown>(placeholder);
+    sv._bound = true;
+    sv._doc = doc;
+    sv._ownsDoc = false;
+    sv._ytype = ytype;
+    sv._childUnsubs.forEach((u) => u());
+    sv._childUnsubs = [];
+    return sv;
   }
 
   private _materialize(): T {
@@ -480,6 +541,12 @@ export class StoreValue<T> {
     // — mirroring the in-memory store's unconditional emitChange-on-change.
     // (Do NOT gate on `isEqual` here: a custom field-ignoring `isEqual` would
     // leave the snapshot stale after a real change, tearing useSyncExternalStore.)
+    //
+    // A remote merge may add/remove nested child subtrees — reconcile handles,
+    // then activate any newly-adopted ones (idempotent for existing children).
+    if (this._reconcileChildren()) {
+      for (const child of this._children.values()) child._activateTree();
+    }
     this._value = this._materialize();
     this._shape = this._buildShape();
     this._snapshot = this._buildSnapshot();
@@ -614,6 +681,7 @@ export class StoreValue<T> {
     this._yobserver = null;
     for (const child of this._children.values()) child._detach();
     this._bound = false;
+    this._activated = false;
     this._ytype = null;
     this._doc = null;
     this._ownsDoc = false;
