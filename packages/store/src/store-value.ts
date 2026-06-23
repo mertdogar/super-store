@@ -143,6 +143,10 @@ export class StoreValue<T> {
   /** key → child handle, for object stores. */
   private _children: Map<string, StoreValue<unknown>> = new Map();
   private _yobserver: (() => void) | null = null;
+  /** Set by the patch helpers whenever they actually mutate the Y type, so
+   * set()/update() can report (and emit on) genuine change only. */
+  private _dirty = false;
+  private _disposed = false;
 
   constructor(value: T, options?: StoreValueOptions<T>) {
     this._value = value;
@@ -172,12 +176,14 @@ export class StoreValue<T> {
   /** The backing Yjs document. Accessing it lazily binds an unbound store to a
    * private in-memory doc. Attach persistence/sync providers here. */
   get doc(): Y.Doc {
+    if (this._disposed) throw new Error("StoreValue has been disposed");
     if (!this._bound) this._bindRoot(new Y.Doc(), true);
     return this._doc!;
   }
 
   /** The backing Yjs shared type. Lazily binds (private doc) if needed. */
   getYType(): Y.AbstractType<unknown> {
+    if (this._disposed) throw new Error("StoreValue has been disposed");
     if (!this._bound) this._bindRoot(new Y.Doc(), true);
     return this._ytype!;
   }
@@ -189,6 +195,7 @@ export class StoreValue<T> {
    * considered changed under `isEqual`.
    */
   set(value: T): boolean {
+    if (this._disposed) throw new Error("StoreValue has been disposed");
     if (this.isEqual(this._value, value)) return false;
     if (this._bound) {
       const kind = yKindOf(getTypeName(value));
@@ -197,8 +204,13 @@ export class StoreValue<T> {
           `Cannot change a bound StoreValue's root kind from ${this._yKind} to ${kind}`,
         );
       }
+      this._dirty = false;
       this._doc!.transact(() => this._patch(value), STORE_ORIGIN);
-      return true;
+      // Honest return: true iff the diff-and-patch actually mutated the doc
+      // (which is exactly when the observer fires and emits). A structurally
+      // identical value is a no-op — unlike the in-memory store, which emits
+      // on any reference-different set under the default `===`.
+      return this._dirty;
     }
     this._value = isOneOfSpecialTypes(value) ? value : cloneSkippingStoreValues(value);
     this._watchChildren(this._value);
@@ -214,6 +226,7 @@ export class StoreValue<T> {
    * one transaction (one emit per affected handle).
    */
   update(value: StoreUpdate<T>): boolean {
+    if (this._disposed) throw new Error("StoreValue has been disposed");
     if (!this._partialUpdateSupported) {
       throw new Error(
         `Partial updates are not supported for this value type ${typeof this._value}`,
@@ -232,21 +245,26 @@ export class StoreValue<T> {
   }
 
   private _updateBound(value: StoreUpdate<T>): boolean {
-    let changed = false;
+    this._dirty = false;
+    let childChanged = false;
     this._doc!.transact(() => {
       const plain: Record<string, unknown> = {};
       for (const [k, uv] of Object.entries(value)) {
         const child = this._children.get(k);
-        if (child) child.update(uv as never);
-        else plain[k] = uv;
+        if (child) {
+          if (child.update(uv as never)) childChanged = true;
+        } else {
+          plain[k] = uv;
+        }
       }
       const merged = { ...(this._value as object), ...plain };
       if (!this.isEqual(this._value, merged as T)) {
         for (const [k, val] of Object.entries(plain)) this._setKey(k, val);
-        changed = true;
       }
     }, STORE_ORIGIN);
-    return changed;
+    // `_dirty` reflects plain-key writes on this handle; childChanged reflects
+    // nested child updates. Either means a genuine change occurred.
+    return this._dirty || childChanged;
   }
 
   _subscribe(listener: () => void) {
@@ -264,6 +282,8 @@ export class StoreValue<T> {
   /** Tear down observers and, if this store created its own private doc,
    * destroy it. */
   dispose() {
+    if (this._disposed) return;
+    this._disposed = true;
     if (this._yobserver && this._ytype) this._ytype.unobserveDeep(this._yobserver);
     this._yobserver = null;
     for (const child of this._children.values()) child.dispose();
@@ -316,7 +336,9 @@ export class StoreValue<T> {
     if (!hasChild) return v as InferStoreValueSnapshot<T>;
     const resolved: Record<string, unknown> = {};
     for (const [k, child] of Object.entries(v as object)) {
-      resolved[k] = child instanceof StoreValue ? child.value : child;
+      // getSnapshot() (not .value) so nested composites unwrap recursively —
+      // no raw StoreValue handle ever leaks into the snapshot.
+      resolved[k] = child instanceof StoreValue ? child.getSnapshot() : child;
     }
     return resolved as InferStoreValueSnapshot<T>;
   }
@@ -423,7 +445,16 @@ export class StoreValue<T> {
         const out: Record<string, unknown> = {};
         for (const k of (ytype as Y.Map<unknown>).keys()) {
           const v = (ytype as Y.Map<unknown>).get(k);
-          out[k] = isYType(v) ? this._children.get(k) : decodeLeaf(v);
+          if (isYType(v)) {
+            const child = this._children.get(k);
+            // A nested Y type with no local handle is a foreign/remote subtree
+            // we have not adopted yet — skip it rather than leak `undefined`.
+            // (M3 adopts these on hydration / remote merge.)
+            if (child === undefined) continue;
+            out[k] = child;
+          } else {
+            out[k] = decodeLeaf(v);
+          }
         }
         return out as T;
       }
@@ -442,10 +473,15 @@ export class StoreValue<T> {
   }
 
   private _onYChange(): void {
-    const prev = this._value;
+    // The deep observer fires only when this subtree's Yjs data actually
+    // changed (local no-op writes are already filtered at set()/update()
+    // entry by `isEqual`, and the diff-and-patch writes nothing when content
+    // is unchanged). So always re-materialise, rebuild the snapshot, and emit
+    // — mirroring the in-memory store's unconditional emitChange-on-change.
+    // (Do NOT gate on `isEqual` here: a custom field-ignoring `isEqual` would
+    // leave the snapshot stale after a real change, tearing useSyncExternalStore.)
     this._value = this._materialize();
     this._shape = this._buildShape();
-    if (this.isEqual(prev, this._value)) return;
     this._snapshot = this._buildSnapshot();
     for (const listener of this.listeners) listener();
   }
@@ -458,6 +494,7 @@ export class StoreValue<T> {
       case "scalar": {
         if (!deepEqual(decodeLeaf((ytype as Y.Map<unknown>).get("v")), value)) {
           (ytype as Y.Map<unknown>).set("v", encodeLeaf(value));
+          this._dirty = true;
         }
         break;
       }
@@ -476,10 +513,16 @@ export class StoreValue<T> {
         const want = new Map<string, unknown>();
         for (const m of value as Set<unknown>) want.set(hashKey(m), m);
         for (const k of Array.from((ytype as Y.Map<unknown>).keys())) {
-          if (!want.has(k)) (ytype as Y.Map<unknown>).delete(k);
+          if (!want.has(k)) {
+            (ytype as Y.Map<unknown>).delete(k);
+            this._dirty = true;
+          }
         }
         for (const [hk, m] of want) {
-          if (!(ytype as Y.Map<unknown>).has(hk)) (ytype as Y.Map<unknown>).set(hk, encodeLeaf(m));
+          if (!(ytype as Y.Map<unknown>).has(hk)) {
+            (ytype as Y.Map<unknown>).set(hk, encodeLeaf(m));
+            this._dirty = true;
+          }
         }
         break;
       }
@@ -487,12 +530,16 @@ export class StoreValue<T> {
         const want = new Map<string, [unknown, unknown]>();
         for (const [k, v] of value as Map<unknown, unknown>) want.set(hashKey(k), [k, v]);
         for (const k of Array.from((ytype as Y.Map<unknown>).keys())) {
-          if (!want.has(k)) (ytype as Y.Map<unknown>).delete(k);
+          if (!want.has(k)) {
+            (ytype as Y.Map<unknown>).delete(k);
+            this._dirty = true;
+          }
         }
         for (const [hk, [k, v]] of want) {
           const cur = (ytype as Y.Map<[unknown, unknown]>).get(hk);
           if (!cur || !deepEqual(decodeLeaf(cur[0]), k) || !deepEqual(decodeLeaf(cur[1]), v)) {
             (ytype as Y.Map<unknown>).set(hk, [encodeLeaf(k), encodeLeaf(v)]);
+            this._dirty = true;
           }
         }
         break;
@@ -515,8 +562,14 @@ export class StoreValue<T> {
     }
     const delCount = old.length - p - s;
     const insItems = next.slice(p, next.length - s).map(encodeLeaf);
-    if (delCount > 0) ya.delete(p, delCount);
-    if (insItems.length > 0) ya.insert(p, insItems);
+    if (delCount > 0) {
+      ya.delete(p, delCount);
+      this._dirty = true;
+    }
+    if (insItems.length > 0) {
+      ya.insert(p, insItems);
+      this._dirty = true;
+    }
   }
 
   private _deleteKey(key: string): void {
@@ -525,7 +578,10 @@ export class StoreValue<T> {
       child._detach();
       this._children.delete(key);
     }
-    if ((this._ytype as Y.Map<unknown>).has(key)) (this._ytype as Y.Map<unknown>).delete(key);
+    if ((this._ytype as Y.Map<unknown>).has(key)) {
+      (this._ytype as Y.Map<unknown>).delete(key);
+      this._dirty = true;
+    }
   }
 
   private _setKey(key: string, val: unknown): void {
@@ -535,6 +591,7 @@ export class StoreValue<T> {
       this._deleteKey(key);
       this._attachChild(key, val);
       this._children.get(key)!._activateTree();
+      this._dirty = true;
       return;
     }
     if (child) {
@@ -543,7 +600,10 @@ export class StoreValue<T> {
     }
     const ymap = this._ytype as Y.Map<unknown>;
     const cur = ymap.has(key) && !isYType(ymap.get(key)) ? decodeLeaf(ymap.get(key)) : NOTHING;
-    if (!deepEqual(cur, val)) ymap.set(key, encodeLeaf(val));
+    if (!deepEqual(cur, val)) {
+      ymap.set(key, encodeLeaf(val));
+      this._dirty = true;
+    }
   }
 
   /** Revert this (formerly bound) subtree to unbound in-memory mode, keeping
