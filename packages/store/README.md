@@ -1,8 +1,8 @@
 # @super-store/store
 
 A reactive primitive — `StoreValue<T>` — backed by [Yjs](https://yjs.dev). It mirrors the
-API of the in-memory store (`@super-store/old-store`) so existing code compiles largely
-unchanged, but underneath it is a CRDT: state can be **persisted**, **synced for real-time
+API of a plain in-memory store so existing code compiles largely unchanged, but underneath
+it is a CRDT: state can be **persisted**, **synced for real-time
 collaboration**, and **undone/redone** — all opt-in, all hidden behind the same surface.
 
 One runtime dependency: `yjs`. No React (see `@super-store/react` for hooks).
