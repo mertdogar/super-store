@@ -25,8 +25,8 @@
     "lint": "oxlint",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
-    "docs:dev": "pnpm --filter @super-store/docs dev",
-    "docs:build": "pnpm --filter @super-store/docs build"
+    "docs:dev": "pnpm --filter @super-store/store build && pnpm --filter @super-store/docs dev",
+    "docs:build": "pnpm --filter @super-store/store build && pnpm --filter @super-store/docs build"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
