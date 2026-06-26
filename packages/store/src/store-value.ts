@@ -108,8 +108,10 @@ function yKindOf(typeName: TypeName): YKind {
   }
 }
 
-function isOneOfSpecialTypes(value: unknown) {
-  return specialTypes.includes(getTypeName(value) as never);
+function isOneOfSpecialTypes(value: unknown): boolean {
+  if (value instanceof StoreValue) return true; // identity — bundler- & subclass-proof
+  if (value === null || typeof value !== "object") return false;
+  return (specialTypes as readonly string[]).includes((value as object).constructor.name);
 }
 
 function pick<T extends object, K extends keyof T>(obj: T, keys: readonly K[]): Pick<T, K> {

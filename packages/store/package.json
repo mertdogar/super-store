@@ -1,6 +1,6 @@
 {
   "name": "@super-store/store",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A reactive store primitive backed by a Yjs CRDT — local, real-time collaborative, persistent and undoable, behind one in-memory-style API.",
   "keywords": [
     "collaboration",
@@ -23,7 +23,8 @@
     "directory": "packages/store"
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "type": "module",
   "sideEffects": false,

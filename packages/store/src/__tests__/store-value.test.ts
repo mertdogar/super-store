@@ -772,3 +772,34 @@ describe("StoreValue.select()", () => {
     expect(third).not.toBe(first);
   });
 });
+
+// ─── Regression: child clone-skip detection is identity/name based ────────────
+// `cloneSkippingStoreValues` must keep live StoreValue children (incl. subclasses
+// and bundler-renamed classes) and Set/Map/Array children by reference, and clone
+// other inert children without throwing. The old name-only check threw on any
+// child whose constructor.name wasn't "StoreValue"/Set/Map/Array.
+
+describe("StoreValue — child clone-skip detection", () => {
+  it("keeps a StoreValue subclass child by reference (does not throw)", () => {
+    class Sub extends StoreValue<number> {}
+    const parent = new StoreValue<{ child: Sub; label: string }>({
+      child: new Sub(0),
+      label: "a",
+    });
+    expect(() => parent.update({ label: "b" })).not.toThrow();
+    expect(parent.value.child).toBeInstanceOf(StoreValue);
+  });
+
+  it("keeps a Set child by reference (not cloned)", () => {
+    const s = new Set([1]);
+    const parent = new StoreValue<{ s: Set<number>; label: string }>({ s, label: "a" });
+    parent.update({ label: "b" });
+    expect(parent.value.s).toBe(s);
+  });
+
+  it("clones an inert Date child without throwing", () => {
+    const parent = new StoreValue<{ d: Date; label: string }>({ d: new Date(0), label: "a" });
+    expect(() => parent.update({ label: "b" })).not.toThrow();
+    expect(parent.value.d).toEqual(new Date(0));
+  });
+});
